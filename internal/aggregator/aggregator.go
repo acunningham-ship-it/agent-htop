@@ -35,6 +35,7 @@ type AgentView struct {
 	LastTool      string // Last tool_use name from logs
 	IsError       bool
 	Anomalies     []*anomaly.AnomalyEvent // Active anomalies
+	Projection    *Projection              // Cost projection for today
 }
 
 // Aggregator subscribes to watcher events, parses logs, and maintains fleet state.
@@ -46,9 +47,11 @@ type Aggregator struct {
 	detector   *anomaly.Detector
 	runtimes   map[parser.Runtime]bool // Which runtimes to include
 
-	mu        sync.RWMutex
-	fleetState *FleetState
-	stateCh   chan *FleetState
+	mu              sync.RWMutex
+	fleetState      *FleetState
+	costTrackers    map[string]*AgentCostTracker // Per-agent cost tracking
+	dailyAverages   map[string][]float64         // Per-agent daily cost history
+	stateCh         chan *FleetState
 
 	stopCh chan struct{}
 	wg     sync.WaitGroup
@@ -67,15 +70,17 @@ func NewAggregatorWithRuntimes(companyID, logDir string, apiClient *api.Client, 
 	}
 
 	return &Aggregator{
-		companyID:  companyID,
-		logDir:     logDir,
-		apiClient:  apiClient,
-		watcher:    w,
-		detector:   anomaly.NewDetector(),
-		runtimes:   runtimeMap,
-		fleetState: &FleetState{Agents: make([]*AgentView, 0)},
-		stateCh:    make(chan *FleetState, 10),
-		stopCh:     make(chan struct{}),
+		companyID:     companyID,
+		logDir:        logDir,
+		apiClient:     apiClient,
+		watcher:       w,
+		detector:      anomaly.NewDetector(),
+		runtimes:      runtimeMap,
+		fleetState:    &FleetState{Agents: make([]*AgentView, 0)},
+		costTrackers:  make(map[string]*AgentCostTracker),
+		dailyAverages: make(map[string][]float64),
+		stateCh:       make(chan *FleetState, 10),
+		stopCh:        make(chan struct{}),
 	}
 }
 
@@ -285,6 +290,24 @@ func (a *Aggregator) updateFleetState(ctx context.Context, run *parser.AgentRun)
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
+	now := time.Now()
+
+	// Get or create cost tracker for this agent
+	tracker, exists := a.costTrackers[run.AgentID]
+	if !exists {
+		tracker = NewAgentCostTracker(run.AgentID)
+		a.costTrackers[run.AgentID] = tracker
+	}
+
+	// Add cost sample to tracker
+	tracker.AddSample(run.TotalCostUSD, now)
+
+	// Calculate daily average for this agent
+	dailyAvg := RollingDailyAverage(a.dailyAverages[run.AgentID])
+
+	// Calculate projection
+	projection := tracker.CalculateProjection(now, dailyAvg)
+
 	// Get agent name (with fallback to UUID)
 	agentName := run.AgentID
 	if name, err := a.apiClient.GetAgentName(ctx, run.AgentID); err == nil {
@@ -301,6 +324,7 @@ func (a *Aggregator) updateFleetState(ctx context.Context, run *parser.AgentRun)
 		OutputTokens: int64(run.TotalOutputTokens),
 		IsError:      run.IsError,
 		ElapsedMS:    run.DurationMS,
+		Projection:   projection,
 	}
 
 	// Determine status
