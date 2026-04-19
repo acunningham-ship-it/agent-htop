@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/acunningham-ship-it/agent-htop/internal/anomaly"
-	"github.com/acunningham-ship-it/agent-htop/internal/api"
 	"github.com/acunningham-ship-it/agent-htop/internal/parser"
 	"github.com/acunningham-ship-it/agent-htop/internal/watcher"
 )
@@ -34,18 +33,19 @@ type AgentView struct {
 	OutputTokens  int64
 	LastTool      string // Last tool_use name from logs
 	IsError       bool
+	Runtime       parser.Runtime            // Which runtime this agent runs on
 	Anomalies     []*anomaly.AnomalyEvent // Active anomalies
 	Projection    *Projection              // Cost projection for today
 }
 
 // Aggregator subscribes to watcher events, parses logs, and maintains fleet state.
 type Aggregator struct {
-	companyID  string
-	logDir     string
-	apiClient  *api.Client
-	watcher    *watcher.Watcher
-	detector   *anomaly.Detector
-	runtimes   map[parser.Runtime]bool // Which runtimes to include
+	companyID   string
+	logDir      string
+	agentNamer  AgentNamer
+	watcher     *watcher.Watcher
+	detector    *anomaly.Detector
+	runtimes    map[parser.Runtime]bool // Which runtimes to include
 
 	mu              sync.RWMutex
 	fleetState      *FleetState
@@ -58,12 +58,12 @@ type Aggregator struct {
 }
 
 // NewAggregator creates a new fleet state aggregator.
-func NewAggregator(companyID, logDir string, apiClient *api.Client, w *watcher.Watcher) *Aggregator {
-	return NewAggregatorWithRuntimes(companyID, logDir, apiClient, w, []parser.Runtime{parser.RuntimePaperclip})
+func NewAggregator(companyID, logDir string, agentNamer AgentNamer, w *watcher.Watcher) *Aggregator {
+	return NewAggregatorWithRuntimes(companyID, logDir, agentNamer, w, []parser.Runtime{parser.RuntimePaperclip})
 }
 
 // NewAggregatorWithRuntimes creates a fleet state aggregator with custom runtimes.
-func NewAggregatorWithRuntimes(companyID, logDir string, apiClient *api.Client, w *watcher.Watcher, runtimes []parser.Runtime) *Aggregator {
+func NewAggregatorWithRuntimes(companyID, logDir string, agentNamer AgentNamer, w *watcher.Watcher, runtimes []parser.Runtime) *Aggregator {
 	runtimeMap := make(map[parser.Runtime]bool)
 	for _, rt := range runtimes {
 		runtimeMap[rt] = true
@@ -72,7 +72,7 @@ func NewAggregatorWithRuntimes(companyID, logDir string, apiClient *api.Client, 
 	return &Aggregator{
 		companyID:     companyID,
 		logDir:        logDir,
-		apiClient:     apiClient,
+		agentNamer:    agentNamer,
 		watcher:       w,
 		detector:      anomaly.NewDetector(),
 		runtimes:      runtimeMap,
@@ -92,9 +92,9 @@ func (a *Aggregator) Start(ctx context.Context) error {
 	go a.handleAnomalies(ctx)
 
 	// Pre-fetch all agent names for this company to avoid repeated API calls during log parsing
-	if a.apiClient != nil {
+	if a.agentNamer != nil {
 		fmt.Printf("[aggregator] Pre-fetching agent names for company %s\n", a.companyID)
-		if err := a.apiClient.RefreshAgentCache(ctx, a.companyID); err != nil {
+		if err := a.agentNamer.RefreshAgentCache(ctx, a.companyID); err != nil {
 			fmt.Printf("[aggregator] Warning: failed to pre-fetch agents (will fall back to UUIDs): %v\n", err)
 			// Continue - we'll fall back to UUIDs
 		}
@@ -218,8 +218,8 @@ func (a *Aggregator) parseAndUpdateLog(ctx context.Context, logPath string) erro
 
 	// Get agent name for detector
 	agentName := run.AgentID
-	if a.apiClient != nil {
-		if name, err := a.apiClient.GetAgentName(ctx, run.AgentID); err == nil {
+	if a.agentNamer != nil {
+		if name, err := a.agentNamer.GetAgentName(ctx, run.AgentID); err == nil && name != "" {
 			agentName = name
 		}
 	}
@@ -276,8 +276,8 @@ func (a *Aggregator) parseAndUpdateClaudeLog(ctx context.Context, logPath string
 
 	// Get agent name (may fail for Claude agents not in Paperclip)
 	agentName := run.AgentID
-	if a.apiClient != nil {
-		if name, err := a.apiClient.GetAgentName(ctx, run.AgentID); err == nil {
+	if a.agentNamer != nil {
+		if name, err := a.agentNamer.GetAgentName(ctx, run.AgentID); err == nil && name != "" {
 			agentName = name
 		}
 	}
@@ -316,8 +316,8 @@ func (a *Aggregator) updateFleetState(ctx context.Context, run *parser.AgentRun)
 
 	// Get agent name (with fallback to UUID)
 	agentName := run.AgentID
-	if a.apiClient != nil {
-		if name, err := a.apiClient.GetAgentName(ctx, run.AgentID); err == nil {
+	if a.agentNamer != nil {
+		if name, err := a.agentNamer.GetAgentName(ctx, run.AgentID); err == nil && name != "" {
 			agentName = name
 		}
 	}
@@ -332,6 +332,7 @@ func (a *Aggregator) updateFleetState(ctx context.Context, run *parser.AgentRun)
 		OutputTokens: int64(run.TotalOutputTokens),
 		IsError:      run.IsError,
 		ElapsedMS:    run.DurationMS,
+		Runtime:      run.Runtime,
 		Projection:   projection,
 	}
 

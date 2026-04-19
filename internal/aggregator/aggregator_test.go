@@ -28,13 +28,13 @@ func TestAggregatorLoadsRealLogs(t *testing.T) {
 	}
 
 	// Create aggregator
-	apiClient := api.NewClient("http://localhost:3101")
+	agentNamer := api.NewClient("http://localhost:3101")
 	w, err := watcher.NewWatcher(logDir)
 	if err != nil {
 		t.Fatalf("Failed to create watcher: %v", err)
 	}
 
-	agg := NewAggregator(companyID, logDir, apiClient, w)
+	agg := NewAggregator(companyID, logDir, agentNamer, w)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -77,14 +77,14 @@ func TestAggregatorGoroutineCleanup(t *testing.T) {
 		logDir = t.TempDir()
 	}
 
-	apiClient := api.NewClient("http://localhost:3101")
+	agentNamer := api.NewClient("http://localhost:3101")
 	w, err := watcher.NewWatcher(logDir)
 	if err != nil {
 		t.Fatalf("Failed to create watcher: %v", err)
 	}
 
 	companyID := "test-company"
-	agg := NewAggregator(companyID, logDir, apiClient, w)
+	agg := NewAggregator(companyID, logDir, agentNamer, w)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

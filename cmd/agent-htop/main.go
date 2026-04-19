@@ -162,16 +162,21 @@ Examples:
 		}
 	}
 
-	// Create API client (only if company specified)
+	// Create API client and agent namer (only if company specified)
 	var apiClient *api.Client
+	var agentNamer aggregator.AgentNamer
 	ctx := context.Background()
 	if *companyID != "" {
 		apiClient = api.NewClient(cfg.APIURL)
+		agentNamer = apiClient
 		// Check if Paperclip is reachable
 		if err := apiClient.Health(ctx); err != nil {
 			log.Printf("Warning: Paperclip API not reachable: %v", err)
 			log.Printf("Will continue with limited functionality")
 		}
+	} else {
+		// No company specified - use no-op agent namer
+		agentNamer = aggregator.NullAgentNamer{}
 	}
 
 	// Parse config runtimes into parser.Runtime values
@@ -197,7 +202,7 @@ Examples:
 	}
 
 	// Create aggregator with selected runtimes
-	agg := aggregator.NewAggregatorWithRuntimes(*companyID, logDir, apiClient, w, runtimes)
+	agg := aggregator.NewAggregatorWithRuntimes(*companyID, logDir, agentNamer, w, runtimes)
 
 	// Create Discord notifier if webhook is configured
 	dashboardURL := fmt.Sprintf("%s/fleet/%s", cfg.APIURL, *companyID)

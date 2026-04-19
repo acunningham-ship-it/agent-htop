@@ -389,13 +389,15 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "K":
 		// Shift+K to kill selected agent - show confirmation
-		// TODO(HTO-35): Once Runtime field is added to AgentView, check if the selected
-		// agent's runtime supports killing (e.g., CapabilitiesByRuntime[selected.Runtime].CanKill)
-		// and skip this action for Claude Code sessions.
+		// Check if the runtime supports killing
 		filtered := m.filterAgents(m.fleet.Agents)
 		if len(filtered) > 0 && m.selectedRow < len(filtered) {
-			m.confirmKill = true
-			m.confirmAgent = filtered[m.selectedRow].AgentID
+			selected := filtered[m.selectedRow]
+			caps := aggregator.GetCapabilities(selected.Runtime)
+			if caps.CanKill {
+				m.confirmKill = true
+				m.confirmAgent = selected.AgentID
+			}
 		}
 	case "y":
 		// Confirm kill
@@ -413,15 +415,21 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Shift+P to pause selected agent
 		filtered := m.filterAgents(m.fleet.Agents)
 		if len(filtered) > 0 && m.selectedRow < len(filtered) {
-			agentID := filtered[m.selectedRow].AgentID
-			return m, pauseAgent(m.apiClient, agentID)
+			selected := filtered[m.selectedRow]
+			caps := aggregator.GetCapabilities(selected.Runtime)
+			if caps.CanPause {
+				return m, pauseAgent(m.apiClient, selected.AgentID)
+			}
 		}
 	case "R":
 		// Shift+R to resume selected agent
 		filtered := m.filterAgents(m.fleet.Agents)
 		if len(filtered) > 0 && m.selectedRow < len(filtered) {
-			agentID := filtered[m.selectedRow].AgentID
-			return m, resumeAgent(m.apiClient, agentID)
+			selected := filtered[m.selectedRow]
+			caps := aggregator.GetCapabilities(selected.Runtime)
+			if caps.CanPause { // Resume requires pause capability
+				return m, resumeAgent(m.apiClient, selected.AgentID)
+			}
 		}
 	}
 	return m, nil
@@ -620,8 +628,7 @@ func (m *Model) renderHeader() string {
 	}
 
 	// Main header line: agent-htop v0.2.0 | <runtime badges> | N sessions | updated Xs ago
-	// TODO(HTO-35): Once Runtime field is added to AgentView, make [K]ill hint conditional:
-	// grey it out or replace with "(kill: n/a for claude)" when a Claude session is selected.
+	// Note: [K]ill, [P]ause, [R]esume are only available for Paperclip agents
 	header := fmt.Sprintf(
 		"agent-htop v0.2.0 | %s | %d sessions | updated %s ago   %s  %s%s  [q]uit [K]ill [P]ause [R]esume [/]search\n",
 		runtimeStr,
