@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/acunningham-ship-it/agent-htop/internal/api"
 	"github.com/acunningham-ship-it/agent-htop/internal/watcher"
@@ -34,7 +35,8 @@ func TestAggregatorLoadsRealLogs(t *testing.T) {
 	}
 
 	agg := NewAggregator(companyID, logDir, apiClient, w)
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	// Load existing logs
 	if err := agg.Start(ctx); err != nil {
@@ -55,5 +57,53 @@ func TestAggregatorLoadsRealLogs(t *testing.T) {
 		}
 	}
 
+	// Cancel context and stop aggregator
+	cancel()
 	agg.Stop()
+}
+
+// TestAggregatorGoroutineCleanup verifies that background goroutines exit
+// quickly when context is cancelled, even without log data.
+func TestAggregatorGoroutineCleanup(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("Failed to get home dir: %v", err)
+	}
+
+	logDir := filepath.Join(home, ".paperclip", "instances", "default", "data", "run-logs")
+
+	// Create aggregator with a temporary log dir if real one doesn't exist
+	if _, err := os.Stat(logDir); os.IsNotExist(err) {
+		logDir = t.TempDir()
+	}
+
+	apiClient := api.NewClient("http://localhost:3101")
+	w, err := watcher.NewWatcher(logDir)
+	if err != nil {
+		t.Fatalf("Failed to create watcher: %v", err)
+	}
+
+	companyID := "test-company"
+	agg := NewAggregator(companyID, logDir, apiClient, w)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Start aggregator
+	if err := agg.Start(ctx); err != nil {
+		t.Fatalf("Failed to start aggregator: %v", err)
+	}
+
+	// Cancel context immediately and measure Stop() latency
+	cancel()
+	start := time.Now()
+	agg.Stop()
+	elapsed := time.Since(start)
+
+	// Verify that Stop() returns within 100ms (goroutines should exit quickly)
+	maxDuration := 100 * time.Millisecond
+	if elapsed > maxDuration {
+		t.Errorf("Stop() took %v, expected < %v. Goroutines may not be exiting on context cancellation",
+			elapsed, maxDuration)
+	}
 }

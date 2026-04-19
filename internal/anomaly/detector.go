@@ -198,4 +198,7 @@ func (d *Detector) Events() <-chan *AnomalyEvent {
 // Stop stops the detector.
 func (d *Detector) Stop() {
 	close(d.stopCh)
+	// Close the event channel to unblock any receivers waiting for events.
+	// Safe because ProcessRun() checks stopCh before sending.
+	close(d.eventsCh)
 }

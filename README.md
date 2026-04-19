@@ -44,7 +44,7 @@ The binary auto-discovers your Paperclip log directory at `~/.paperclip/instance
 |------|---------|-------------|
 | `--company` | *required* | Company ID from Paperclip |
 | `--api-url` | `http://localhost:3101` | Paperclip API URL |
-| `--runtime` | `all` | Runtime type: `paperclip`, `claude`, `codex`, or `all` |
+| `--runtime` | `all` | Runtime types to monitor (comma-separated): `paperclip`, `claude`, `codex`, `all` (default) |
 | `--refresh-ms` | `2000` | Polling interval in milliseconds |
 | `--alert-level` | `info` | Minimum alert level for Discord: `info`, `warn`, `critical` |
 | `--config` | *optional* | Config file path |
@@ -114,25 +114,60 @@ Detected: 2026-04-19T21:30:45Z
 
 agent-htop works with multiple execution environments. Use the `--runtime` flag to select which logs to monitor:
 
-| Runtime | Log path | Status |
-|---------|----------|--------|
-| **Paperclip** | `~/.paperclip/instances/default/data/run-logs/<co>/<agent>/` | ✅ Fully supported |
-| **Claude Code** | `~/.claude/projects/*/` | ✅ Fully supported |
-| **Codex** | TBD | 🔬 Research phase |
+| Runtime | Log path | Status | Details |
+|---------|----------|--------|---------|
+| **Paperclip** | `~/.paperclip/instances/default/data/run-logs/<co>/<agent>/` | ✅ Fully supported | NDJSON format with full metrics (tokens, cost, tool calls) |
+| **Claude Code** | `~/.claude/projects/*/` | ✅ Fully supported | JSONL format with session metadata and token usage |
+| **Codex** | TBD | 🔬 Research phase | Format under investigation; stub parser in place for future implementation |
 
 ### Using with Claude Code (not Paperclip)
 
-If you use Claude Code standalone (without Paperclip), you can still monitor your agent runs:
+If you use Claude Code standalone (without Paperclip), you can still monitor your agent runs. Claude Code logs are stored in `~/.claude/projects/*/` and include session metadata, token usage, and execution details.
 
 ```bash
 # Monitor Claude Code sessions only
 agent-htop --company 920a3930-f429-45cd-8fb8-774fa81cbd96 --runtime claude
 
-# Or monitor both (default)
+# Monitor both Paperclip and Claude Code (default)
 agent-htop --company 920a3930-f429-45cd-8fb8-774fa81cbd96 --runtime all
+
+# Monitor specific runtimes (comma-separated)
+agent-htop --company 920a3930-f429-45cd-8fb8-774fa81cbd96 --runtime paperclip,claude
 ```
 
-**Note**: Claude Code logs don't include company context. agent-htop will display all Claude Code sessions regardless of the `--company` flag when `--runtime=claude` or `all`. Use the `--runtime=paperclip` flag if you want only Paperclip logs for a specific company.
+**How Claude Code Logs Work**
+- Logs are stored in `~/.claude/projects/<project-name>/*.jsonl`
+- Each `.jsonl` file is a Claude Code session
+- agent-htop discovers and parses these automatically
+- Project paths are used as agent identifiers for display
+- Claude Code logs don't have a company context, so all sessions are visible regardless of the `--company` flag
+- Use `--runtime=paperclip` if you want only Paperclip logs for a specific company
+
+**Mapping Project Paths to Agent Names**
+- agent-htop tries to resolve Paperclip agent names via the API
+- If a Claude project name doesn't match a Paperclip agent, the project path is used as the agent ID
+- Example: `~/.claude/projects/-home-armani-projects-agent-htop/` → agent ID: `-home-armani-projects-agent-htop`
+
+### Codex Support (Research Phase)
+
+Codex support is currently in research phase. A stub parser is in place to document the expected format and provide guidance for future implementation.
+
+```bash
+# Codex is not yet available
+agent-htop --company 920a3930-f429-45cd-8fb8-774fa81cbd96 --runtime codex
+# Error: Codex parser not yet implemented
+```
+
+**What We Need to Know**
+- Where Codex stores execution logs (directory path, file naming)
+- Log format (JSONL, JSON, plain text, or other)
+- Available fields (token usage, model name, execution time, status, etc.)
+- How to map Codex runs to agent identities
+
+Once Codex documentation is available, the parser will:
+1. Follow the same pattern as Paperclip and Claude Code parsers
+2. Normalize logs into the unified `AgentRun` struct
+3. Integrate seamlessly with the fleet dashboard
 
 ## Build from source
 

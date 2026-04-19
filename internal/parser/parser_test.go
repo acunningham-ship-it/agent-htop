@@ -184,3 +184,116 @@ func TestClaudeParseJSONL(t *testing.T) {
 		t.Errorf("Runtime: got %v, want %v", run.Runtime, RuntimeClaude)
 	}
 }
+
+func TestParseNDJSON_ErrorResult(t *testing.T) {
+	// Test Paperclip log with error result
+	sampleLog := `{"ts":"2026-04-19T19:00:00.000Z","stream":"stdout","chunk":"{\"type\":\"system\",\"subtype\":\"init\",\"cwd\":\"/tmp/error-test\",\"session_id\":\"error-session-id\",\"uuid\":\"test-uuid\",\"model\":\"claude-sonnet-4-6\",\"claude_code_version\":\"2.1.97\",\"permissionMode\":\"limitedPermissions\",\"fast_mode_state\":\"off\",\"apiKeySource\":\"none\",\"output_style\":\"default\",\"tools\":[],\"mcp_servers\":[],\"slash_commands\":[],\"agents\":[],\"skills\":[],\"plugins\":[]}"}
+{"ts":"2026-04-19T19:00:05.000Z","stream":"stderr","chunk":"{\"type\":\"result\",\"subtype\":\"error\",\"session_id\":\"error-session-id\",\"uuid\":\"res-1\",\"is_error\":true,\"result\":\"Task failed due to timeout\",\"duration_ms\":5000,\"duration_api_ms\":4000,\"num_turns\":1,\"stop_reason\":\"error\",\"total_cost_usd\":0.0001,\"terminal_reason\":\"error\",\"fast_mode_state\":\"off\",\"usage\":{\"input_tokens\":50,\"output_tokens\":10},\"modelUsage\":{\"claude-sonnet-4-6\":{\"inputTokens\":50,\"outputTokens\":10,\"cacheReadInputTokens\":0,\"cacheCreationInputTokens\":0,\"webSearchRequests\":0,\"costUSD\":0.0001,\"contextWindow\":200000,\"maxOutputTokens\":32000}}}"}
+`
+
+	parser := NewParser("test-company", "test-agent", "error-run")
+	run, err := parser.Parse(strings.NewReader(sampleLog))
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+
+	if run.Status != "error" {
+		t.Errorf("Status: got %q, want %q", run.Status, "error")
+	}
+	if !run.IsError {
+		t.Errorf("IsError: got %v, want %v", run.IsError, true)
+	}
+	if run.Result != "Task failed due to timeout" {
+		t.Errorf("Result: got %q, want error message", run.Result)
+	}
+	if run.TerminalReason != "error" {
+		t.Errorf("TerminalReason: got %q, want %q", run.TerminalReason, "error")
+	}
+}
+
+func TestParseNDJSON_MultipleToolCalls(t *testing.T) {
+	// Test with multiple tool calls and results
+	sampleLog := `{"ts":"2026-04-19T20:00:00.000Z","stream":"stdout","chunk":"{\"type\":\"system\",\"subtype\":\"init\",\"cwd\":\"/tmp/test\",\"session_id\":\"multi-tool-session\",\"uuid\":\"test-uuid\",\"model\":\"claude-sonnet-4-6\",\"claude_code_version\":\"2.1.97\",\"permissionMode\":\"bypassPermissions\",\"fast_mode_state\":\"off\",\"apiKeySource\":\"none\",\"output_style\":\"default\",\"tools\":[],\"mcp_servers\":[],\"slash_commands\":[],\"agents\":[],\"skills\":[],\"plugins\":[]}"}
+{"ts":"2026-04-19T20:00:05.000Z","stream":"stdout","chunk":"{\"type\":\"assistant\",\"session_id\":\"multi-tool-session\",\"uuid\":\"asst-1\",\"message\":{\"model\":\"claude-sonnet-4-6\",\"id\":\"msg_01\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"tool_01\",\"name\":\"Read\",\"input\":{\"file\":\"/tmp/test.txt\"}},{\"type\":\"tool_use\",\"id\":\"tool_02\",\"name\":\"Write\",\"input\":{\"file\":\"/tmp/output.txt\"}}],\"usage\":{\"input_tokens\":100,\"output_tokens\":50},\"stop_reason\":\"tool_use\"}}"}
+{"ts":"2026-04-19T20:00:10.000Z","stream":"stdout","chunk":"{\"type\":\"user\",\"session_id\":\"multi-tool-session\",\"uuid\":\"user-1\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"tool_01\",\"content\":\"file contents\",\"is_error\":false},{\"type\":\"tool_result\",\"tool_use_id\":\"tool_02\",\"content\":\"\",\"is_error\":false}]}}"}
+{"ts":"2026-04-19T20:00:15.000Z","stream":"stdout","chunk":"{\"type\":\"result\",\"subtype\":\"success\",\"session_id\":\"multi-tool-session\",\"uuid\":\"res-1\",\"is_error\":false,\"result\":\"Done\",\"duration_ms\":15000,\"duration_api_ms\":10000,\"num_turns\":2,\"stop_reason\":\"end_turn\",\"total_cost_usd\":0.001,\"terminal_reason\":\"completed\",\"fast_mode_state\":\"off\",\"usage\":{\"input_tokens\":100,\"output_tokens\":50},\"modelUsage\":{\"claude-sonnet-4-6\":{\"inputTokens\":100,\"outputTokens\":50,\"cacheReadInputTokens\":0,\"cacheCreationInputTokens\":0,\"webSearchRequests\":0,\"costUSD\":0.001,\"contextWindow\":200000,\"maxOutputTokens\":32000}}}"}
+`
+
+	parser := NewParser("test-company", "test-agent", "multi-tool-run")
+	run, err := parser.Parse(strings.NewReader(sampleLog))
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+
+	if run.NumToolCalls != 2 {
+		t.Errorf("NumToolCalls: got %d, want %d", run.NumToolCalls, 2)
+	}
+	if len(run.ToolCalls) != 2 {
+		t.Errorf("ToolCalls length: got %d, want %d", len(run.ToolCalls), 2)
+	}
+
+	// First tool
+	if run.ToolCalls[0].Name != "Read" {
+		t.Errorf("First ToolCall Name: got %q, want %q", run.ToolCalls[0].Name, "Read")
+	}
+	if run.ToolCalls[0].Result != "file contents" {
+		t.Errorf("First ToolCall Result: got %q, want %q", run.ToolCalls[0].Result, "file contents")
+	}
+
+	// Second tool
+	if run.ToolCalls[1].Name != "Write" {
+		t.Errorf("Second ToolCall Name: got %q, want %q", run.ToolCalls[1].Name, "Write")
+	}
+	if run.ToolCalls[1].Result != "" {
+		t.Errorf("Second ToolCall Result: got %q, want empty string", run.ToolCalls[1].Result)
+	}
+}
+
+func TestClaudeParseJSONL_ErrorHandling(t *testing.T) {
+	// Test Claude parser with tool error result
+	sampleLog := `{"type":"assistant","timestamp":"2026-04-19T18:00:05.000Z","sessionId":"error-test-id","uuid":"asst-1","message":{"model":"claude-haiku-4-5-20251001","id":"msg_01","type":"message","role":"assistant","content":[{"type":"tool_use","id":"tool_01","name":"Bash","input":{"command":"false"}}],"usage":{"input_tokens":100,"output_tokens":50}},"cwd":"/home/test","version":"2.1.91"}
+{"type":"user","timestamp":"2026-04-19T18:00:10.000Z","sessionId":"error-test-id","uuid":"user-1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool_01","content":"Command failed with exit code 1","is_error":true}]}}
+{"type":"last-prompt","lastPrompt":"done","sessionId":"error-test-id","timestamp":"2026-04-19T18:00:15.000Z"}
+`
+
+	parser := NewClaudeParser("error-test-id", "/home/test/projects/")
+	run, err := parser.Parse(strings.NewReader(sampleLog))
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+
+	if run.NumToolCalls != 1 {
+		t.Errorf("NumToolCalls: got %d, want %d", run.NumToolCalls, 1)
+	}
+	if len(run.ToolCalls) == 0 {
+		t.Fatalf("ToolCalls is empty, cannot check error flag")
+	}
+	if !run.ToolCalls[0].IsError {
+		t.Errorf("ToolCall IsError: got %v, want %v", run.ToolCalls[0].IsError, true)
+	}
+	if run.ToolCalls[0].Result != "Command failed with exit code 1" {
+		t.Errorf("ToolCall Result: got %q, want error message", run.ToolCalls[0].Result)
+	}
+}
+
+func TestClaudeParseJSONL_EmptyLog(t *testing.T) {
+	// Test Claude parser with empty log
+	sampleLog := ""
+
+	parser := NewClaudeParser("empty-session", "/home/test/projects/")
+	run, err := parser.Parse(strings.NewReader(sampleLog))
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+
+	// Should return valid but empty run
+	if run.SessionID != "empty-session" {
+		t.Errorf("SessionID: got %q, want %q", run.SessionID, "empty-session")
+	}
+	if run.Status != "success" {
+		t.Errorf("Status: got %q, want %q (default for empty log)", run.Status, "success")
+	}
+	if run.NumTurns != 0 {
+		t.Errorf("NumTurns: got %d, want %d", run.NumTurns, 0)
+	}
+}
