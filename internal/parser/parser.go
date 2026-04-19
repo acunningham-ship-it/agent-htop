@@ -28,6 +28,7 @@ func NewParser(companyID, agentID, runID string) *Parser {
 // Parse reads an NDJSON log file and returns a completed AgentRun.
 func (p *Parser) Parse(r io.Reader) (*AgentRun, error) {
 	run := &AgentRun{
+		Runtime:    RuntimePaperclip,
 		RunID:      p.runID,
 		AgentID:    p.agentID,
 		CompanyID:  p.companyID,

@@ -110,13 +110,29 @@ Detected: 2026-04-19T21:30:45Z
 | `r` | Force refresh |
 | `q` / `Ctrl+C` | Quit |
 
-## Supported harnesses
+## Supported runtimes
 
-| Harness    | Log path                                                        |
-|------------|-----------------------------------------------------------------|
-| Paperclip  | `~/.paperclip/instances/default/data/run-logs/<co>/<agent>/`   |
+agent-htop works with multiple execution environments. Use the `--runtime` flag to select which logs to monitor:
 
-Claude Code and Codex support is planned.
+| Runtime | Log path | Status |
+|---------|----------|--------|
+| **Paperclip** | `~/.paperclip/instances/default/data/run-logs/<co>/<agent>/` | ✅ Fully supported |
+| **Claude Code** | `~/.claude/projects/*/` | ✅ Fully supported |
+| **Codex** | TBD | 🔬 Research phase |
+
+### Using with Claude Code (not Paperclip)
+
+If you use Claude Code standalone (without Paperclip), you can still monitor your agent runs:
+
+```bash
+# Monitor Claude Code sessions only
+agent-htop --company 920a3930-f429-45cd-8fb8-774fa81cbd96 --runtime claude
+
+# Or monitor both (default)
+agent-htop --company 920a3930-f429-45cd-8fb8-774fa81cbd96 --runtime all
+```
+
+**Note**: Claude Code logs don't include company context. agent-htop will display all Claude Code sessions regardless of the `--company` flag when `--runtime=claude` or `all`. Use the `--runtime=paperclip` flag if you want only Paperclip logs for a specific company.
 
 ## Build from source
 

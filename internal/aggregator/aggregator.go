@@ -44,6 +44,7 @@ type Aggregator struct {
 	apiClient  *api.Client
 	watcher    *watcher.Watcher
 	detector   *anomaly.Detector
+	runtimes   map[parser.Runtime]bool // Which runtimes to include
 
 	mu        sync.RWMutex
 	fleetState *FleetState
@@ -55,12 +56,23 @@ type Aggregator struct {
 
 // NewAggregator creates a new fleet state aggregator.
 func NewAggregator(companyID, logDir string, apiClient *api.Client, w *watcher.Watcher) *Aggregator {
+	return NewAggregatorWithRuntimes(companyID, logDir, apiClient, w, []parser.Runtime{parser.RuntimePaperclip})
+}
+
+// NewAggregatorWithRuntimes creates a fleet state aggregator with custom runtimes.
+func NewAggregatorWithRuntimes(companyID, logDir string, apiClient *api.Client, w *watcher.Watcher, runtimes []parser.Runtime) *Aggregator {
+	runtimeMap := make(map[parser.Runtime]bool)
+	for _, rt := range runtimes {
+		runtimeMap[rt] = true
+	}
+
 	return &Aggregator{
 		companyID:  companyID,
 		logDir:     logDir,
 		apiClient:  apiClient,
 		watcher:    w,
 		detector:   anomaly.NewDetector(),
+		runtimes:   runtimeMap,
 		fleetState: &FleetState{Agents: make([]*AgentView, 0)},
 		stateCh:    make(chan *FleetState, 10),
 		stopCh:     make(chan struct{}),
@@ -69,6 +81,11 @@ func NewAggregator(companyID, logDir string, apiClient *api.Client, w *watcher.W
 
 // Start begins aggregating fleet state.
 func (a *Aggregator) Start(ctx context.Context) error {
+	// Start background goroutines FIRST so they can drain the anomaly event channel during log loading
+	a.wg.Add(2)
+	go a.run(ctx)
+	go a.handleAnomalies(ctx)
+
 	// Pre-fetch all agent names for this company to avoid repeated API calls during log parsing
 	fmt.Printf("[aggregator] Pre-fetching agent names for company %s\n", a.companyID)
 	if err := a.apiClient.RefreshAgentCache(ctx, a.companyID); err != nil {
@@ -76,53 +93,88 @@ func (a *Aggregator) Start(ctx context.Context) error {
 		// Continue - we'll fall back to UUIDs
 	}
 
-	// Initial load of existing logs
+	// Initial load of existing logs (Paperclip + Claude if configured)
 	if err := a.loadExistingLogs(ctx); err != nil {
 		return fmt.Errorf("failed to load existing logs: %w", err)
 	}
-
-	// Subscribe to watcher events and anomaly events
-	a.wg.Add(2)
-	go a.run(ctx)
-	go a.handleAnomalies(ctx)
 
 	return nil
 }
 
 // loadExistingLogs scans the log directory and parses all existing .ndjson files.
 func (a *Aggregator) loadExistingLogs(ctx context.Context) error {
-	agentDir := filepath.Join(a.logDir, a.companyID)
-
-	// Check if company directory exists
-	if _, err := os.Stat(agentDir); os.IsNotExist(err) {
-		// No logs yet for this company
-		fmt.Printf("[aggregator] No logs found for company %s\n", a.companyID)
-		return nil
-	}
-
-	fmt.Printf("[aggregator] Loading logs for company %s from %s\n", a.companyID, agentDir)
 	count := 0
 
-	// Walk all agents and runs
-	err := filepath.Walk(agentDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
+	// Load Paperclip logs if included in runtimes
+	if a.runtimes[parser.RuntimePaperclip] {
+		agentDir := filepath.Join(a.logDir, a.companyID)
 
-		if !info.IsDir() && filepath.Ext(path) == ".ndjson" {
-			count++
-			// Parse the log file
-			if err := a.parseAndUpdateLog(ctx, path); err != nil {
-				fmt.Printf("Warning: failed to parse %s: %v\n", path, err)
-				// Continue processing other logs
+		// Check if company directory exists
+		if _, err := os.Stat(agentDir); err == nil {
+			fmt.Printf("[aggregator] Loading Paperclip logs for company %s from %s\n", a.companyID, agentDir)
+
+			// Walk all agents and runs
+			walkCount := 0
+			err := filepath.Walk(agentDir, func(path string, info os.FileInfo, err error) error {
+				walkCount++
+				if err != nil {
+					return err
+				}
+
+				if !info.IsDir() && filepath.Ext(path) == ".ndjson" {
+					count++
+					if count%100 == 0 {
+						fmt.Printf("[aggregator] Processed %d log files\n", count)
+					}
+					// Parse the log file
+					if err := a.parseAndUpdateLog(ctx, path); err != nil {
+						fmt.Printf("Warning: failed to parse %s: %v\n", path, err)
+						// Continue processing other logs
+					}
+				}
+
+				return nil
+			})
+			if err != nil {
+				fmt.Printf("Warning: failed to walk Paperclip logs: %v\n", err)
 			}
 		}
+	}
 
-		return nil
-	})
+	// Load Claude Code logs if included in runtimes
+	if a.runtimes[parser.RuntimeClaude] {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			claudeProjectsDir := filepath.Join(home, ".claude", "projects")
+			fmt.Printf("[aggregator] Loading Claude Code logs from %s\n", claudeProjectsDir)
+
+			if _, err := os.Stat(claudeProjectsDir); err == nil {
+				// Walk all projects
+				err := filepath.Walk(claudeProjectsDir, func(path string, info os.FileInfo, err error) error {
+					if err != nil {
+						return err
+					}
+
+					if !info.IsDir() && filepath.Ext(path) == ".jsonl" {
+						count++
+						// Parse the log file
+						if err := a.parseAndUpdateClaudeLog(ctx, path); err != nil {
+							fmt.Printf("Warning: failed to parse %s: %v\n", path, err)
+							// Continue processing other logs
+						}
+					}
+
+					return nil
+				})
+				if err != nil {
+					fmt.Printf("Warning: failed to walk Claude logs: %v\n", err)
+				}
+			}
+		}
+	}
 
 	fmt.Printf("[aggregator] Loaded %d log files, fleet has %d agents\n", count, len(a.fleetState.Agents))
-	return err
+	return nil
 }
 
 // parseAndUpdateLog parses a single log file and updates fleet state.
@@ -158,6 +210,62 @@ func (a *Aggregator) parseAndUpdateLog(ctx context.Context, logPath string) erro
 	}
 
 	// Get agent name for detector
+	agentName := run.AgentID
+	if name, err := a.apiClient.GetAgentName(ctx, run.AgentID); err == nil {
+		agentName = name
+	}
+
+	// Process through anomaly detector
+	a.detector.ProcessRun(run, agentName)
+
+	// Update fleet state
+	a.updateFleetState(ctx, run)
+
+	return nil
+}
+
+// parseAndUpdateClaudeLog parses a Claude Code log file and updates fleet state.
+func (a *Aggregator) parseAndUpdateClaudeLog(ctx context.Context, logPath string) error {
+	// Extract session ID from path: ~/.claude/projects/PROJECT_NAME/SESSION_ID.jsonl
+	rel, err := filepath.Rel(filepath.Join(os.ExpandEnv("$HOME"), ".claude", "projects"), logPath)
+	if err != nil {
+		return err
+	}
+
+	// Normalize to forward slashes and split
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	if len(parts) < 2 {
+		return fmt.Errorf("invalid Claude log path structure: %s", rel)
+	}
+
+	projectPath := parts[0]
+	sessionID := filepath.Base(logPath)
+	sessionID = sessionID[:len(sessionID)-len(".jsonl")] // Remove extension
+
+	// Parse the log file using Claude parser
+	file, err := os.Open(logPath)
+	if err != nil {
+		return fmt.Errorf("failed to open log: %w", err)
+	}
+	defer file.Close()
+
+	p := parser.NewClaudeParser(sessionID, projectPath)
+	run, err := p.Parse(file)
+	if err != nil {
+		return fmt.Errorf("failed to parse log: %w", err)
+	}
+
+	// For Claude logs, derive agent ID from project path (use last component as agent identifier)
+	// This is a heuristic since Claude logs don't have explicit Paperclip agent IDs
+	if run.AgentID == "" {
+		run.AgentID = filepath.Base(projectPath)
+	}
+
+	// Skip this run if it's not for the company we're monitoring
+	// Claude logs don't have company ID, so we process all of them
+	// (This is a limitation we could improve with log metadata)
+
+	// Get agent name (may fail for Claude agents not in Paperclip)
 	agentName := run.AgentID
 	if name, err := a.apiClient.GetAgentName(ctx, run.AgentID); err == nil {
 		agentName = name
@@ -227,10 +335,12 @@ func (a *Aggregator) updateFleetState(ctx context.Context, run *parser.AgentRun)
 	a.sortAgents()
 	a.fleetState.UpdatedAt = time.Now()
 
-	// Broadcast updated state
+	// Broadcast updated state (non-blocking - skip if nobody is listening)
 	select {
 	case a.stateCh <- a.fleetState:
 	case <-a.stopCh:
+	default:
+		// If nobody is reading, skip this broadcast
 	}
 }
 
@@ -346,11 +456,13 @@ func (a *Aggregator) handleAnomalies(ctx context.Context) {
 			}
 			a.mu.Unlock()
 
-			// Broadcast updated state
+			// Broadcast updated state (non-blocking - skip if nobody is listening)
 			select {
 			case a.stateCh <- a.fleetState:
 			case <-a.stopCh:
 				return
+			default:
+				// If nobody is reading, skip this broadcast
 			}
 		}
 	}

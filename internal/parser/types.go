@@ -2,12 +2,25 @@ package parser
 
 import "time"
 
+// Runtime identifies the execution environment for an agent run.
+type Runtime string
+
+const (
+	RuntimePaperclip Runtime = "paperclip"
+	RuntimeClaude    Runtime = "claude"
+	RuntimeCodex     Runtime = "codex"
+)
+
 // AgentRun represents a complete agent execution from start to finish.
+// It works across multiple runtimes (Paperclip, Claude Code, Codex).
 type AgentRun struct {
+	// Runtime & Source
+	Runtime   Runtime // Which backend generated this run (paperclip|claude|codex)
+
 	// Identifiers
 	RunID     string // Log filename (UUID) - primary identifier
-	AgentID   string // Parent directory name
-	CompanyID string // Grandparent directory name
+	AgentID   string // Parent directory name (Paperclip) or project slug (Claude)
+	CompanyID string // Grandparent directory name (Paperclip only)
 	SessionID string // Claude Code session UUID (secondary)
 
 	// Timing

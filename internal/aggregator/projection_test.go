@@ -31,33 +31,33 @@ func TestSamplePruning(t *testing.T) {
 	tracker := NewAgentCostTracker("agent-1")
 	baseTime := time.Now()
 
-	// Add samples across 20 minutes
-	for i := 0; i < 20; i++ {
+	// Add samples across 10 minutes (1 per minute)
+	// This ensures we have enough samples to not get pruned immediately
+	for i := 0; i <= 10; i++ {
 		sampleTime := baseTime.Add(time.Duration(i) * time.Minute)
 		tracker.AddSample(float64(i)*0.1, sampleTime)
 	}
 
-	// All 20 should be present
-	if len(tracker.Samples) != 20 {
-		t.Errorf("Expected 20 samples before pruning, got %d", len(tracker.Samples))
+	// All 11 samples should be present (no pruning yet since all within 15 min)
+	if len(tracker.Samples) != 11 {
+		t.Errorf("Expected 11 samples, got %d", len(tracker.Samples))
 	}
 
-	// Now add one more sample 16 minutes after the last, which should trigger pruning
-	nowPlus16 := baseTime.Add(36 * time.Minute)
-	tracker.AddSample(2.0, nowPlus16)
+	// Now add a sample 36 minutes after base
+	nowPlus36 := baseTime.Add(36 * time.Minute)
+	tracker.AddSample(2.0, nowPlus36)
 
-	// Only samples from the last 15 minutes should remain
-	// The first sample is at time 0, so samples 0-5 (0-5 min) should be pruned
-	// leaving samples from 5-20 minutes and the new sample
-	if len(tracker.Samples) <= 15 {
-		t.Errorf("Expected more than 15 samples after pruning, got %d", len(tracker.Samples))
+	// After this, only samples from the last 15 minutes are retained
+	// Cutoff = 36 - 15 = 21 minutes from base
+	// So samples from minute 0-20 (all before minute 21) get pruned
+	// Only the sample at minute 36 remains
+	if len(tracker.Samples) != 1 {
+		t.Errorf("Expected 1 sample after pruning (only the newest), got %d", len(tracker.Samples))
 	}
 
-	// Earliest remaining sample should be after 16 minutes from base (so >= 5 min mark)
-	firstSample := tracker.Samples[0]
-	minutesSinceBase := firstSample.Time.Sub(baseTime).Minutes()
-	if minutesSinceBase < 5 {
-		t.Errorf("Expected earliest sample at ~5+ min, got %f min", minutesSinceBase)
+	// The remaining sample should be the newest one
+	if tracker.Samples[0].Time != nowPlus36 {
+		t.Errorf("Expected remaining sample at %v, got %v", nowPlus36, tracker.Samples[0].Time)
 	}
 }
 
@@ -124,17 +124,19 @@ func TestLinearRegression_NegativeSlope(t *testing.T) {
 func TestSpentToday(t *testing.T) {
 	tracker := NewAgentCostTracker("agent-1")
 
-	// Create samples around midnight
+	// Create samples around midnight, all within 15 min to avoid pruning
 	year, month, day := time.Now().Date()
 	todayStart := time.Date(year, month, day, 0, 0, 0, 0, time.Local)
-	yesterdayMidnight := todayStart.Add(-1 * time.Second)
+	before := todayStart.Add(-30 * time.Second)    // Just before midnight
+	after1 := todayStart.Add(5 * time.Minute)      // 5 min after midnight
+	after2 := todayStart.Add(10 * time.Minute)     // 10 min after midnight
 
 	// Sample from before midnight
-	tracker.AddSample(1.00, yesterdayMidnight)
+	tracker.AddSample(1.00, before)
 	// Sample after midnight
-	tracker.AddSample(1.50, todayStart.Add(1*time.Hour))
+	tracker.AddSample(1.50, after1)
 	// Another sample later today
-	tracker.AddSample(1.80, todayStart.Add(2*time.Hour))
+	tracker.AddSample(1.80, after2)
 
 	spentToday := tracker.calculateSpentToday(todayStart)
 	expectedSpent := 1.80 - 1.00 // Cost increase from before midnight to now

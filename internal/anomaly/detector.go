@@ -1,6 +1,7 @@
 package anomaly
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
@@ -82,7 +83,6 @@ func (d *Detector) ProcessRun(run *parser.AgentRun, agentName string) {
 	}
 
 	d.mu.Lock()
-	defer d.mu.Unlock()
 
 	// Update run history
 	if d.agentRuns[run.AgentID] == nil {
@@ -133,14 +133,27 @@ func (d *Detector) ProcessRun(run *parser.AgentRun, agentName string) {
 			select {
 			case d.eventsCh <- event:
 			case <-d.stopCh:
+				d.mu.Unlock()
 				return
 			}
 		}
 	}
 
-	// Check cost anomaly (requires detector state)
-	costEvents := d.detectCostAnomaly(run.AgentID, agentName)
-	for _, event := range costEvents {
+	// Get cost anomaly state before unlocking
+	dailyCost := d.dailyCosts[run.AgentID]
+	sevenDayAvg := d.sevenDayAvg[run.AgentID]
+	d.mu.Unlock()
+
+	// Check cost anomaly (no lock needed, we copied the values)
+	if sevenDayAvg > 0 && dailyCost > 5*sevenDayAvg {
+		event := &AnomalyEvent{
+			AgentID:     run.AgentID,
+			AgentName:   agentName,
+			AnomalyType: CostAnomaly,
+			Message:     fmt.Sprintf("Cost anomaly: Today's spend $%.2f is %.1f× the 7-day average ($%.2f)", dailyCost, dailyCost/sevenDayAvg, sevenDayAvg),
+			DetectedAt:  time.Now(),
+			Severity:    "critical",
+		}
 		select {
 		case d.eventsCh <- event:
 		case <-d.stopCh:

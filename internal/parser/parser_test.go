@@ -96,4 +96,91 @@ func TestParseNDJSON(t *testing.T) {
 	if !run.EndTime.Equal(expectedEnd) {
 		t.Errorf("EndTime: got %v, want %v", run.EndTime, expectedEnd)
 	}
+
+	// Validate runtime
+	if run.Runtime != RuntimePaperclip {
+		t.Errorf("Runtime: got %v, want %v", run.Runtime, RuntimePaperclip)
+	}
+}
+
+func TestClaudeParseJSONL(t *testing.T) {
+	// Sample JSONL log data from Claude Code session
+	sampleLog := `{"type":"queue-operation","operation":"enqueue","timestamp":"2026-04-19T18:00:00.000Z","sessionId":"07081b17-a403-4572-90cf-df9390fcacc7","content":"Test session started"}
+{"type":"assistant","timestamp":"2026-04-19T18:00:05.000Z","sessionId":"07081b17-a403-4572-90cf-df9390fcacc7","uuid":"asst-1","message":{"model":"claude-haiku-4-5-20251001","id":"msg_01","type":"message","role":"assistant","content":[{"type":"tool_use","id":"tool_01","name":"Bash","input":{"command":"ls"}}],"usage":{"input_tokens":120,"output_tokens":60}},"cwd":"/home/armani/projects/agent-htop","version":"2.1.91"}
+{"type":"user","timestamp":"2026-04-19T18:00:10.000Z","sessionId":"07081b17-a403-4572-90cf-df9390fcacc7","uuid":"user-1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool_01","content":"file1.txt\nfile2.txt","is_error":false}]}}
+{"type":"assistant","timestamp":"2026-04-19T18:00:15.000Z","sessionId":"07081b17-a403-4572-90cf-df9390fcacc7","uuid":"asst-2","message":{"model":"claude-haiku-4-5-20251001","id":"msg_02","type":"message","role":"assistant","content":[{"type":"text","text":"Found 2 files"}],"usage":{"input_tokens":140,"output_tokens":40}},"cwd":"/home/armani/projects/agent-htop","version":"2.1.91"}
+{"type":"last-prompt","lastPrompt":"done","sessionId":"07081b17-a403-4572-90cf-df9390fcacc7","timestamp":"2026-04-19T18:00:20.000Z"}
+`
+
+	parser := NewClaudeParser("07081b17-a403-4572-90cf-df9390fcacc7", "/home/armani/.claude/projects/-test/")
+	run, err := parser.Parse(strings.NewReader(sampleLog))
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+
+	// Validate basic fields
+	if run.RunID != "07081b17-a403-4572-90cf-df9390fcacc7" {
+		t.Errorf("RunID: got %q, want %q", run.RunID, "07081b17-a403-4572-90cf-df9390fcacc7")
+	}
+	if run.SessionID != "07081b17-a403-4572-90cf-df9390fcacc7" {
+		t.Errorf("SessionID: got %q, want %q", run.SessionID, "07081b17-a403-4572-90cf-df9390fcacc7")
+	}
+	if run.Model != "claude-haiku-4-5-20251001" {
+		t.Errorf("Model: got %q, want %q", run.Model, "claude-haiku-4-5-20251001")
+	}
+	if run.Status != "success" {
+		t.Errorf("Status: got %q, want %q", run.Status, "success")
+	}
+	if run.WorkDir != "/home/armani/projects/agent-htop" {
+		t.Errorf("WorkDir: got %q, want %q", run.WorkDir, "/home/armani/projects/agent-htop")
+	}
+
+	// Validate token usage (sum of all assistant events)
+	if run.TotalInputTokens != 260 { // 120 + 140
+		t.Errorf("TotalInputTokens: got %d, want %d", run.TotalInputTokens, 260)
+	}
+	if run.TotalOutputTokens != 100 { // 60 + 40
+		t.Errorf("TotalOutputTokens: got %d, want %d", run.TotalOutputTokens, 100)
+	}
+
+	// Validate turns (count of assistant messages)
+	if run.NumTurns != 2 {
+		t.Errorf("NumTurns: got %d, want %d", run.NumTurns, 2)
+	}
+
+	// Validate tool calls
+	if run.NumToolCalls != 1 {
+		t.Errorf("NumToolCalls: got %d, want %d", run.NumToolCalls, 1)
+	}
+	if len(run.ToolCalls) != 1 {
+		t.Errorf("ToolCalls length: got %d, want %d", len(run.ToolCalls), 1)
+	}
+	if run.ToolCalls[0].Name != "Bash" {
+		t.Errorf("ToolCall Name: got %q, want %q", run.ToolCalls[0].Name, "Bash")
+	}
+	if run.ToolCalls[0].Result != "file1.txt\nfile2.txt" {
+		t.Errorf("ToolCall Result: got %q, want %q", run.ToolCalls[0].Result, "file1.txt\nfile2.txt")
+	}
+
+	// Validate timestamps
+	expectedStart := time.Date(2026, 4, 19, 18, 0, 0, 0, time.UTC)
+	if !run.StartTime.Equal(expectedStart) {
+		t.Errorf("StartTime: got %v, want %v", run.StartTime, expectedStart)
+	}
+
+	expectedEnd := time.Date(2026, 4, 19, 18, 0, 20, 0, time.UTC)
+	if !run.EndTime.Equal(expectedEnd) {
+		t.Errorf("EndTime: got %v, want %v", run.EndTime, expectedEnd)
+	}
+
+	// Validate duration
+	expectedDuration := int64(20000) // 20 seconds in ms
+	if run.DurationMS != expectedDuration {
+		t.Errorf("DurationMS: got %d, want %d", run.DurationMS, expectedDuration)
+	}
+
+	// Validate runtime
+	if run.Runtime != RuntimeClaude {
+		t.Errorf("Runtime: got %v, want %v", run.Runtime, RuntimeClaude)
+	}
 }
