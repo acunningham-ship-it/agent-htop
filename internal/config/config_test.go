@@ -18,8 +18,8 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.DiscordWebhook != "" {
 		t.Errorf("expected empty DiscordWebhook, got %s", cfg.DiscordWebhook)
 	}
-	if len(cfg.Runtimes) != 2 {
-		t.Errorf("expected 2 runtimes, got %d", len(cfg.Runtimes))
+	if len(cfg.Runtimes) != 1 || cfg.Runtimes[0] != "auto" {
+		t.Errorf("expected runtimes [auto], got %v", cfg.Runtimes)
 	}
 	if cfg.Theme.ErrorColor != "red" {
 		t.Errorf("expected error_color red, got %s", cfg.Theme.ErrorColor)

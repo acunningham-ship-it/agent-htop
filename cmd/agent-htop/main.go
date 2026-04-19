@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"os"
 	"os/signal"
@@ -27,6 +28,111 @@ var (
 	Version = "v0.1.0-dev"
 	GitSHA  = "unknown"
 )
+
+// resolveRuntimes processes a list of runtime strings (which may include "auto" or "all")
+// and returns the expanded list of parser.Runtime values with proper validation and detection.
+func resolveRuntimes(runtimeStrs []string, companyID string) ([]parser.Runtime, error) {
+	var resolved []parser.Runtime
+
+	// Check for "auto" runtime (auto-detection)
+	if len(runtimeStrs) == 1 && runtimeStrs[0] == "auto" {
+		var detected []parser.Runtime
+
+		// Detect Claude Code: check if ~/.claude/projects/ exists and has .jsonl files
+		home, err := os.UserHomeDir()
+		if err == nil {
+			claudeDir := filepath.Join(home, ".claude", "projects")
+			if hasJSONLFiles(claudeDir) {
+				detected = append(detected, parser.RuntimeClaude)
+			}
+		}
+
+		// Detect Paperclip: only if company flag was set
+		if companyID != "" {
+			detected = append(detected, parser.RuntimePaperclip)
+		}
+
+		// Detect Codex: check if ~/.codex/ exists and has session files
+		if err == nil {
+			codexDir := filepath.Join(home, ".codex")
+			if _, err := os.Stat(codexDir); err == nil {
+				detected = append(detected, parser.RuntimeCodex)
+			}
+		}
+
+		// Fallback: if nothing detected, show Claude even if no sessions yet
+		if len(detected) == 0 {
+			detected = append(detected, parser.RuntimeClaude)
+		}
+
+		return detected, nil
+	}
+
+	// Handle "all" runtime (enable all runtimes)
+	if len(runtimeStrs) == 1 && runtimeStrs[0] == "all" {
+		resolved = append(resolved, parser.RuntimeClaude)
+		resolved = append(resolved, parser.RuntimeCodex)
+		// Paperclip requires company ID
+		if companyID != "" {
+			resolved = append(resolved, parser.RuntimePaperclip)
+		} else {
+			log.Printf("Warning: paperclip runtime requires --company flag; skipping")
+		}
+		return resolved, nil
+	}
+
+	// Parse explicit list of runtimes
+	for _, r := range runtimeStrs {
+		switch r {
+		case "paperclip":
+			if companyID == "" {
+				return nil, fmt.Errorf("paperclip runtime requires --company flag")
+			}
+			resolved = append(resolved, parser.RuntimePaperclip)
+		case "claude":
+			resolved = append(resolved, parser.RuntimeClaude)
+		case "codex":
+			resolved = append(resolved, parser.RuntimeCodex)
+		default:
+			return nil, fmt.Errorf("invalid runtime value: %s (valid: auto|all|claude|codex|paperclip)", r)
+		}
+	}
+
+	return resolved, nil
+}
+
+// hasJSONLFiles checks if a directory exists and contains any .jsonl files.
+func hasJSONLFiles(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			// Recursively check subdirectories
+			subdir := filepath.Join(dir, entry.Name())
+			if hasJSONLFilesInDir(subdir) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// hasJSONLFilesInDir recursively searches for .jsonl files in a directory.
+func hasJSONLFilesInDir(dir string) bool {
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil // Skip errors, keep searching
+		}
+		if !d.IsDir() && strings.HasSuffix(d.Name(), ".jsonl") {
+			return filepath.SkipDir // Signal that we found a file (stop walking)
+		}
+		return nil
+	})
+	return err == filepath.SkipDir
+}
 
 func main() {
 	// Flags
@@ -106,11 +212,6 @@ Examples:
 		os.Exit(1)
 	}
 
-	// When no company is specified, default to Claude-only mode
-	if *companyID == "" && *runtimesStr == "" {
-		cfg.Runtimes = []string{"claude"}
-	}
-
 	// Apply command-line flag overrides
 	if *apiURL != "" {
 		cfg.APIURL = *apiURL
@@ -179,20 +280,11 @@ Examples:
 		agentNamer = aggregator.NullAgentNamer{}
 	}
 
-	// Parse config runtimes into parser.Runtime values
-	var runtimes []parser.Runtime
-	for _, r := range cfg.Runtimes {
-		switch r {
-		case "paperclip":
-			runtimes = append(runtimes, parser.RuntimePaperclip)
-		case "claude":
-			runtimes = append(runtimes, parser.RuntimeClaude)
-		case "codex":
-			runtimes = append(runtimes, parser.RuntimeCodex)
-		default:
-			fmt.Fprintf(os.Stderr, "Error: invalid runtime value in config: %s (valid: paperclip|claude|codex)\n", r)
-			os.Exit(1)
-		}
+	// Resolve config runtimes (handles "auto" detection, "all" expansion, and validation)
+	runtimes, err := resolveRuntimes(cfg.Runtimes, *companyID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
 	}
 
 	// Create watcher

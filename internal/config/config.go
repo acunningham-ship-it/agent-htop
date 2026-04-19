@@ -38,7 +38,7 @@ func DefaultConfig() Config {
 		APIURL:         "http://localhost:3101",
 		RefreshRateMs:  1000,
 		DiscordWebhook: "",
-		Runtimes:       []string{"paperclip", "claude"},
+		Runtimes:       []string{"auto"},
 		Theme: Theme{
 			ErrorColor: "red",
 			WarnColor:  "yellow",
