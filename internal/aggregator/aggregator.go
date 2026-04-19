@@ -92,10 +92,12 @@ func (a *Aggregator) Start(ctx context.Context) error {
 	go a.handleAnomalies(ctx)
 
 	// Pre-fetch all agent names for this company to avoid repeated API calls during log parsing
-	fmt.Printf("[aggregator] Pre-fetching agent names for company %s\n", a.companyID)
-	if err := a.apiClient.RefreshAgentCache(ctx, a.companyID); err != nil {
-		fmt.Printf("[aggregator] Warning: failed to pre-fetch agents (will fall back to UUIDs): %v\n", err)
-		// Continue - we'll fall back to UUIDs
+	if a.apiClient != nil {
+		fmt.Printf("[aggregator] Pre-fetching agent names for company %s\n", a.companyID)
+		if err := a.apiClient.RefreshAgentCache(ctx, a.companyID); err != nil {
+			fmt.Printf("[aggregator] Warning: failed to pre-fetch agents (will fall back to UUIDs): %v\n", err)
+			// Continue - we'll fall back to UUIDs
+		}
 	}
 
 	// Initial load of existing logs (Paperclip + Claude if configured)
@@ -216,8 +218,10 @@ func (a *Aggregator) parseAndUpdateLog(ctx context.Context, logPath string) erro
 
 	// Get agent name for detector
 	agentName := run.AgentID
-	if name, err := a.apiClient.GetAgentName(ctx, run.AgentID); err == nil {
-		agentName = name
+	if a.apiClient != nil {
+		if name, err := a.apiClient.GetAgentName(ctx, run.AgentID); err == nil {
+			agentName = name
+		}
 	}
 
 	// Process through anomaly detector
@@ -272,8 +276,10 @@ func (a *Aggregator) parseAndUpdateClaudeLog(ctx context.Context, logPath string
 
 	// Get agent name (may fail for Claude agents not in Paperclip)
 	agentName := run.AgentID
-	if name, err := a.apiClient.GetAgentName(ctx, run.AgentID); err == nil {
-		agentName = name
+	if a.apiClient != nil {
+		if name, err := a.apiClient.GetAgentName(ctx, run.AgentID); err == nil {
+			agentName = name
+		}
 	}
 
 	// Process through anomaly detector
@@ -310,8 +316,10 @@ func (a *Aggregator) updateFleetState(ctx context.Context, run *parser.AgentRun)
 
 	// Get agent name (with fallback to UUID)
 	agentName := run.AgentID
-	if name, err := a.apiClient.GetAgentName(ctx, run.AgentID); err == nil {
-		agentName = name
+	if a.apiClient != nil {
+		if name, err := a.apiClient.GetAgentName(ctx, run.AgentID); err == nil {
+			agentName = name
+		}
 	}
 
 	// Create or update agent view
@@ -442,6 +450,25 @@ func (a *Aggregator) StateUpdates() <-chan *FleetState {
 // GetDetector returns the anomaly detector (used by notifiers).
 func (a *Aggregator) GetDetector() *anomaly.Detector {
 	return a.detector
+}
+
+// GetActiveRuntimes returns a list of runtimes that are currently active.
+func (a *Aggregator) GetActiveRuntimes() []parser.Runtime {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	var active []parser.Runtime
+	// Return in a consistent order: paperclip, claude, codex
+	if a.runtimes[parser.RuntimePaperclip] {
+		active = append(active, parser.RuntimePaperclip)
+	}
+	if a.runtimes[parser.RuntimeClaude] {
+		active = append(active, parser.RuntimeClaude)
+	}
+	if a.runtimes[parser.RuntimeCodex] {
+		active = append(active, parser.RuntimeCodex)
+	}
+	return active
 }
 
 // handleAnomalies listens to anomaly events and updates agent views.

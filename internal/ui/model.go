@@ -51,6 +51,10 @@ type Model struct {
 	windowHeight int
 	windowWidth  int
 
+	// Configuration
+	companyID  string // Empty if no company specified (Claude Code-first mode)
+	runtimes   []string // Active runtimes (claude, paperclip, codex)
+
 	// Search and filter state
 	searchQuery  string
 	searchMode   bool
@@ -59,7 +63,14 @@ type Model struct {
 }
 
 // New creates a new TUI model.
-func New(agg *aggregator.Aggregator, client *api.Client) *Model {
+func New(agg *aggregator.Aggregator, client *api.Client, companyID string) *Model {
+	// Get active runtimes from aggregator
+	activeRuntimes := agg.GetActiveRuntimes()
+	runtimeStrs := make([]string, len(activeRuntimes))
+	for i, rt := range activeRuntimes {
+		runtimeStrs[i] = string(rt)
+	}
+
 	m := &Model{
 		aggregator:  agg,
 		apiClient:   client,
@@ -69,6 +80,8 @@ func New(agg *aggregator.Aggregator, client *api.Client) *Model {
 		sortMode:    SortName,
 		searchQuery: "",
 		searchMode:  false,
+		companyID:   companyID,
+		runtimes:    runtimeStrs,
 	}
 	state := agg.GetFleetState()
 	if state != nil {
@@ -254,6 +267,21 @@ func formatElapsed(ms int64, status string) string {
 	return fmt.Sprintf("%dm %ds", minutes, secs)
 }
 
+// formatSinceUpdate formats the time since last update as "Xs" or "Xm Ys".
+func formatSinceUpdate(updatedAt time.Time) string {
+	if updatedAt.IsZero() {
+		return "-"
+	}
+	elapsed := time.Since(updatedAt)
+	seconds := int64(elapsed.Seconds())
+	if seconds < 60 {
+		return fmt.Sprintf("%ds", seconds)
+	}
+	minutes := seconds / 60
+	secs := seconds % 60
+	return fmt.Sprintf("%dm %ds", minutes, secs)
+}
+
 // truncate truncates a string to max length.
 func truncate(s string, maxLen int) string {
 	if len(s) > maxLen {
@@ -361,6 +389,9 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "K":
 		// Shift+K to kill selected agent - show confirmation
+		// TODO(HTO-35): Once Runtime field is added to AgentView, check if the selected
+		// agent's runtime supports killing (e.g., CapabilitiesByRuntime[selected.Runtime].CanKill)
+		// and skip this action for Claude Code sessions.
 		filtered := m.filterAgents(m.fleet.Agents)
 		if len(filtered) > 0 && m.selectedRow < len(filtered) {
 			m.confirmKill = true
@@ -573,6 +604,9 @@ func (m *Model) renderHeader() string {
 		totalCost += agent.TotalCostUSD
 	}
 
+	// Build runtime badges
+	runtimeStr := strings.Join(m.runtimes, " ")
+
 	// Build filter and sort indicators
 	filterStr := fmt.Sprintf("[f]%s", m.filterMode)
 	sortStr := fmt.Sprintf("[s]%s", m.sortMode)
@@ -585,20 +619,36 @@ func (m *Model) renderHeader() string {
 		searchStr = fmt.Sprintf(" [/]search: '%s'", m.searchQuery)
 	}
 
+	// Main header line: agent-htop v0.2.0 | <runtime badges> | N sessions | updated Xs ago
+	// TODO(HTO-35): Once Runtime field is added to AgentView, make [K]ill hint conditional:
+	// grey it out or replace with "(kill: n/a for claude)" when a Claude session is selected.
 	header := fmt.Sprintf(
-		"agent-htop  v0.1.0   agents: %d   running: %d   cost today: $%.2f   %s  %s%s  [q]uit [K]ill [P]ause [R]esume [/]search\n",
+		"agent-htop v0.2.0 | %s | %d sessions | updated %s ago   %s  %s%s  [q]uit [K]ill [P]ause [R]esume [/]search\n",
+		runtimeStr,
 		len(m.fleet.Agents),
-		running,
-		totalCost,
+		formatSinceUpdate(m.fleet.UpdatedAt),
 		filterStr,
 		sortStr,
 		searchStr,
 	)
 
-	return lipgloss.NewStyle().
+	// Optional second line: show company ID if --company was set
+	var companyLine string
+	if m.companyID != "" {
+		companyLine = fmt.Sprintf("  Paperclip: %s\n", m.companyID)
+		// Style the company line as dimmed
+		companyLine = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("8")).
+			Render(companyLine)
+	}
+
+	// Style the header
+	mainHeader := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color("12")).
 		Render(header)
+
+	return mainHeader + companyLine
 }
 
 // StateUpdateMsg is a message containing a state update from the aggregator.
