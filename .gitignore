@@ -1,0 +1,5 @@
+agent-htop
+dist/
+*.log
+.env
+.DS_Store

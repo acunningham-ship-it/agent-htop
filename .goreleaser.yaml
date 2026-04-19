@@ -1,0 +1,56 @@
+version: 2
+
+project_name: agent-htop
+
+builds:
+  - id: agent-htop
+    main: ./cmd/agent-htop
+    binary: agent-htop
+
+    env:
+      - CGO_ENABLED=0
+
+    goos:
+      - linux
+      - darwin
+
+    goarch:
+      - amd64
+      - arm64
+
+    ldflags:
+      - -X main.Version={{.Version}}
+      - -X main.GitSHA={{.ShortCommit}}
+
+archives:
+  - id: agent-htop-archive
+    builds:
+      - agent-htop
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format: tar.gz
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - README.md
+      - LICENSE
+      - docs/**/*
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+release:
+  draft: false
+  prerelease: auto
+  name_template: "{{ .ProjectName }} {{ .Version }}"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "Merge pull request"
+      - "Merge remote-tracking branch"
