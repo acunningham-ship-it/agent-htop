@@ -202,3 +202,71 @@ func (d *Detector) Stop() {
 	// Safe because ProcessRun() checks stopCh before sending.
 	close(d.eventsCh)
 }
+
+// CurrentAnomalies returns a snapshot of current anomalies for the given agent.
+// If agentID is empty, returns anomalies for all agents.
+func (d *Detector) CurrentAnomalies(agentID string) []*AnomalyEvent {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	var result []*AnomalyEvent
+
+	// If specific agent requested, get anomalies for that agent only
+	if agentID != "" {
+		runs := d.agentRuns[agentID]
+		if len(runs) == 0 {
+			return result
+		}
+
+		// Run all rules for this agent
+		for _, rule := range d.rules {
+			events := rule.Detect(agentID, agentID, runs)
+			result = append(result, events...)
+		}
+
+		// Check cost anomaly separately
+		dailyCost := d.dailyCosts[agentID]
+		sevenDayAvg := d.sevenDayAvg[agentID]
+		if sevenDayAvg > 0 && dailyCost > 5*sevenDayAvg {
+			result = append(result, &AnomalyEvent{
+				AgentID:     agentID,
+				AgentName:   agentID,
+				AnomalyType: CostAnomaly,
+				Message:     fmt.Sprintf("Cost anomaly: Today's spend $%.2f is %.1f× the 7-day average ($%.2f)", dailyCost, dailyCost/sevenDayAvg, sevenDayAvg),
+				DetectedAt:  time.Now(),
+				Severity:    "critical",
+			})
+		}
+
+		return result
+	}
+
+	// Return anomalies for all agents
+	for aid, runs := range d.agentRuns {
+		if len(runs) == 0 {
+			continue
+		}
+
+		// Run all rules for this agent
+		for _, rule := range d.rules {
+			events := rule.Detect(aid, aid, runs)
+			result = append(result, events...)
+		}
+
+		// Check cost anomaly
+		dailyCost := d.dailyCosts[aid]
+		sevenDayAvg := d.sevenDayAvg[aid]
+		if sevenDayAvg > 0 && dailyCost > 5*sevenDayAvg {
+			result = append(result, &AnomalyEvent{
+				AgentID:     aid,
+				AgentName:   aid,
+				AnomalyType: CostAnomaly,
+				Message:     fmt.Sprintf("Cost anomaly: Today's spend $%.2f is %.1f× the 7-day average ($%.2f)", dailyCost, dailyCost/sevenDayAvg, sevenDayAvg),
+				DetectedAt:  time.Now(),
+				Severity:    "critical",
+			})
+		}
+	}
+
+	return result
+}

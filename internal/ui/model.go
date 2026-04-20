@@ -28,6 +28,7 @@ const (
 	ViewModeHistorical ViewMode = "historical"
 	ViewModeTools      ViewMode = "tools"
 	ViewModeQueue      ViewMode = "queue"
+	ViewModeProcesses  ViewMode = "processes"
 )
 
 // FilterMode represents the current filter state
@@ -100,9 +101,14 @@ type Model struct {
 	alertFlashCycle  int // 0-2 for flashing effect (0 = show, 1 = dim, 2 = show, repeat)
 
 	// Process view state
-	processSortMode string // Sort mode for processes
-	processPageSize int     // Items per page for process view
-	processPage     int     // Current page number for process view
+	processSortMode    string // Sort mode for processes (cpu, mem, age, name, user, pid)
+	processPageSize    int     // Items per page for process view
+	processPage        int     // Current page number for process view
+	processFilterType  string // Filter type: "", "user", "cmd"
+	processFilterValue string // Filter value
+	processConfirmKill bool   // Confirm kill for selected process
+	processConfirmPID  int32  // PID to kill after confirmation
+	processSelectedRow int    // Selected row in process view
 
 	// Queue view state
 	queueManager *queue.Manager
@@ -138,10 +144,15 @@ func New(agg *aggregator.Aggregator, client *api.Client, companyID string, queue
 		companyID:     companyID,
 		runtimes:      runtimeStrs,
 		runtimeStatus: runtimeStatus,
-		processSortMode: "cpu",
-		processPageSize: 20,
-		processPage:     0,
-		queueManager:  queueManager,
+		processSortMode:    "cpu",
+		processPageSize:    20,
+		processPage:        0,
+		processFilterType:  "",
+		processFilterValue: "",
+		processConfirmKill: false,
+		processConfirmPID:  0,
+		processSelectedRow: 0,
+		queueManager:       queueManager,
 	}
 	state := agg.GetFleetState()
 	if state != nil {
@@ -405,6 +416,93 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // handleKeyMsg processes keyboard input.
 func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Handle process view input first
+	if m.viewMode == ViewModeProcesses {
+		switch msg.String() {
+		case "p":
+			// Back to live view
+			m.viewMode = ViewModeLive
+			m.processFilterType = ""
+			m.processFilterValue = ""
+			m.processSelectedRow = 0
+			return m, nil
+		case "s":
+			// Cycle sort mode in process view
+			m.processSortMode = m.nextProcessSortMode()
+			return m, nil
+		case "f":
+			// Cycle filter in process view (user, cmd, all)
+			switch m.processFilterType {
+			case "":
+				m.processFilterType = "user"
+			case "user":
+				m.processFilterType = "cmd"
+			case "cmd":
+				m.processFilterType = ""
+			}
+			m.processFilterValue = ""
+			m.processSelectedRow = 0
+			return m, nil
+		case "up", "k":
+			if m.processSelectedRow > 0 {
+				m.processSelectedRow--
+			}
+			return m, nil
+		case "down", "j":
+			if m.fleet != nil && len(m.fleet.Processes) > 0 {
+				// Count visible processes
+				procs := m.getVisibleProcesses()
+				if m.processSelectedRow < len(procs)-1 {
+					m.processSelectedRow++
+				}
+			}
+			return m, nil
+		case "f9":
+			// Kill process with confirmation
+			if m.fleet != nil && len(m.fleet.Processes) > 0 {
+				procs := m.getVisibleProcesses()
+				if m.processSelectedRow < len(procs) {
+					m.processConfirmKill = true
+					m.processConfirmPID = procs[m.processSelectedRow].PID
+				}
+			}
+			return m, nil
+		case "shift+f9":
+			// Kill process with SIGKILL (shift+f9)
+			if m.fleet != nil && len(m.fleet.Processes) > 0 {
+				procs := m.getVisibleProcesses()
+				if m.processSelectedRow < len(procs) {
+					pid := procs[m.processSelectedRow].PID
+					return m, killProcessCmd(pid, "KILL")
+				}
+			}
+			return m, nil
+		case "y":
+			// Confirm kill with SIGTERM
+			if m.processConfirmKill && m.processConfirmPID > 0 {
+				m.processConfirmKill = false
+				pid := m.processConfirmPID
+				m.processConfirmPID = 0
+				return m, killProcessCmd(pid, "TERM")
+			}
+			return m, nil
+		case "n":
+			// Cancel kill
+			m.processConfirmKill = false
+			m.processConfirmPID = 0
+			return m, nil
+		case "esc":
+			// Exit process view
+			m.viewMode = ViewModeLive
+			m.processFilterType = ""
+			m.processFilterValue = ""
+			m.processSelectedRow = 0
+			m.processConfirmKill = false
+			return m, nil
+		}
+		return m, nil
+	}
+
 	// Handle search mode input
 	if m.searchMode {
 		switch msg.String() {
@@ -647,6 +745,8 @@ func (m *Model) View() string {
 		tableView = m.renderToolHeatmap()
 	} else if m.viewMode == ViewModeHistorical {
 		tableView = m.renderHistoricalView()
+	} else if m.viewMode == ViewModeProcesses {
+		tableView = m.renderProcessesView()
 	} else if m.searchMode {
 		tableView = m.renderSearchMode()
 	} else {

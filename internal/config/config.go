@@ -10,6 +10,13 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
+// Queue represents a queue definition in config.
+type Queue struct {
+	Name          string `toml:"name"`
+	MaxRetries    int    `toml:"max_retries"`
+	RetentionDays int    `toml:"retention_days"`
+}
+
 // Config represents the agent-htop configuration.
 type Config struct {
 	APIURL            string      `toml:"api_url"`
@@ -19,6 +26,7 @@ type Config struct {
 	Theme             Theme       `toml:"theme"`
 	Alerts            Alerts      `toml:"alerts"`
 	Policies          []RawPolicy `toml:"policy"`
+	Queues            []Queue     `toml:"queue"`
 }
 
 // Theme contains theme-related configuration.

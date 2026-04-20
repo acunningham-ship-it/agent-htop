@@ -23,6 +23,7 @@ import (
 	// "github.com/acunningham-ship-it/agent-htop/internal/mcp" // TODO: Re-enable when aggregator interfaces are updated
 	"github.com/acunningham-ship-it/agent-htop/internal/notify"
 	"github.com/acunningham-ship-it/agent-htop/internal/parser"
+	"github.com/acunningham-ship-it/agent-htop/internal/queue"
 	"github.com/acunningham-ship-it/agent-htop/internal/ui"
 	"github.com/acunningham-ship-it/agent-htop/internal/watcher"
 )
@@ -693,6 +694,30 @@ Examples:
 		log.Fatalf("Failed to get home directory: %v", err)
 	}
 
+	// Initialize queue database and manager
+	configDir := filepath.Join(home, ".config", "agent-htop")
+	queueDB, err := queue.NewDB(configDir)
+	if err != nil {
+		log.Fatalf("Failed to initialize queue database: %v", err)
+	}
+	defer queueDB.Close()
+
+	// Convert config queues to queue definitions
+	var queueDefs []queue.QueueDef
+	for _, cfgQueue := range cfg.Queues {
+		queueDefs = append(queueDefs, queue.QueueDef{
+			Name:          cfgQueue.Name,
+			MaxRetries:    cfgQueue.MaxRetries,
+			RetentionDays: cfgQueue.RetentionDays,
+		})
+	}
+
+	// Create queue manager
+	queueManager, err := queue.NewManager(queueDB, queueDefs)
+	if err != nil {
+		log.Fatalf("Failed to create queue manager: %v", err)
+	}
+
 	// Only use Paperclip logDir if a company was specified
 	var logDir string
 	if *companyID != "" {
@@ -864,7 +889,7 @@ Examples:
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
 	// Create TUI model
-	uiModel := ui.New(agg, apiClient, *companyID)
+	uiModel := ui.New(agg, apiClient, *companyID, queueManager)
 
 	// Start the Bubble Tea program
 	p := tea.NewProgram(uiModel, tea.WithAltScreen())
