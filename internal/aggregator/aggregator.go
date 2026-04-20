@@ -68,6 +68,9 @@ type Aggregator struct {
 
 	cpuCollector     *sysinfo.CPUCollector
 	memoryCollector  *sysinfo.MemoryCollector
+	diskCollector    *sysinfo.DiskCollector
+	gpuCollector     *sysinfo.GPUCollector
+	networkCollector *sysinfo.NetworkCollector
 	processCollector *sysinfo.ProcessCollector
 	alertEvaluator   *health.AlertEvaluator
 	policyEngine     PolicyEvaluator // Policy evaluator for guardrail actions
@@ -104,6 +107,9 @@ func NewAggregatorWithRuntimes(companyID, logDir string, agentNamer AgentNamer, 
 		runtimes:         runtimeMap,
 		cpuCollector:     sysinfo.NewCPUCollector(time.Second),
 		memoryCollector:  sysinfo.NewMemoryCollector(time.Second),
+		diskCollector:    sysinfo.NewDiskCollector(time.Second),
+		gpuCollector:     sysinfo.NewGPUCollector(time.Second),
+		networkCollector: sysinfo.NewNetworkCollector(time.Second),
 		processCollector: sysinfo.NewProcessCollector(time.Second),
 		alertEvaluator:   health.NewAlertEvaluator(),
 		fleetState:       &FleetState{Agents: make([]*AgentView, 0), HostMetrics: &HostMetrics{}, Processes: make([]*sysinfo.ProcessInfo, 0)},
@@ -132,6 +138,15 @@ func (a *Aggregator) Start(ctx context.Context) error {
 	}
 	if err := a.memoryCollector.Start(); err != nil {
 		fmt.Printf("[aggregator] Warning: failed to start memory collector: %v\n", err)
+	}
+	if err := a.diskCollector.Start(); err != nil {
+		fmt.Printf("[aggregator] Warning: failed to start disk collector: %v\n", err)
+	}
+	if err := a.gpuCollector.Start(); err != nil {
+		fmt.Printf("[aggregator] Warning: failed to start GPU collector: %v\n", err)
+	}
+	if err := a.networkCollector.Start(); err != nil {
+		fmt.Printf("[aggregator] Warning: failed to start network collector: %v\n", err)
 	}
 	if err := a.processCollector.Start(); err != nil {
 		fmt.Printf("[aggregator] Warning: failed to start process collector: %v\n", err)
@@ -686,6 +701,9 @@ func (a *Aggregator) Stop() {
 	a.detector.Stop()
 	a.cpuCollector.Stop()
 	a.memoryCollector.Stop()
+	a.diskCollector.Stop()
+	a.gpuCollector.Stop()
+	a.networkCollector.Stop()
 	a.processCollector.Stop()
 	a.wg.Wait()
 }
@@ -828,12 +846,26 @@ func (a *Aggregator) GetSystemState() *sysinfo.SystemState {
 
 	now := time.Now()
 
+	// Evaluate alerts against current metrics
+	metrics := &systemMetricsWrapper{
+		cpu:     a.cpuCollector.Get(),
+		mem:     a.memoryCollector.Get(),
+		disk:    a.diskCollector.Get(),
+		gpu:     a.gpuCollector.Get(),
+		network: a.networkCollector.Get(),
+	}
+	a.alertEvaluator.Evaluate(metrics)
+
 	return &sysinfo.SystemState{
 		SchemaVersion: 1,
 		Timestamp:     now,
 		Host: sysinfo.HostState{
 			CPU:        *a.cpuCollector.Get(),
 			Memory:     *a.memoryCollector.Get(),
+			Disk:       *a.diskCollector.Get(),
+			GPU:        *a.gpuCollector.Get(),
+			Network:    *a.networkCollector.Get(),
+			Alerts:     a.alertEvaluator.GetActiveAlerts(),
 			Uptime:     sysinfo.UptimeInfo{Seconds: uptime, UpdatedAt: now},
 			UpdatedAt:  now,
 		},
@@ -1001,7 +1033,13 @@ func truncateArg(arg string, maxLen int) string {
 // evaluateAlerts evaluates health alerts based on current system metrics.
 func (a *Aggregator) evaluateAlerts(cpu *sysinfo.CPUMetrics, mem *sysinfo.MemoryMetrics) {
 	// Create a simple metrics wrapper to satisfy the health.SystemMetrics interface
-	metrics := &systemMetricsWrapper{cpu: cpu, mem: mem}
+	metrics := &systemMetricsWrapper{
+		cpu:     cpu,
+		mem:     mem,
+		disk:    a.diskCollector.Get(),
+		gpu:     a.gpuCollector.Get(),
+		network: a.networkCollector.Get(),
+	}
 	a.alertEvaluator.Evaluate(metrics)
 }
 
@@ -1012,8 +1050,11 @@ func (a *Aggregator) GetActiveAlerts() []*health.Alert {
 
 // systemMetricsWrapper wraps system metrics to satisfy health.SystemMetrics interface
 type systemMetricsWrapper struct {
-	cpu *sysinfo.CPUMetrics
-	mem *sysinfo.MemoryMetrics
+	cpu     *sysinfo.CPUMetrics
+	mem     *sysinfo.MemoryMetrics
+	disk    *sysinfo.DiskMetrics
+	gpu     *sysinfo.GPUMetrics
+	network *sysinfo.NetworkMetrics
 }
 
 func (w *systemMetricsWrapper) GetCPULoad1Min() float64 {
@@ -1063,4 +1104,39 @@ func (w *systemMetricsWrapper) GetMemSwapTotalMB() uint64 {
 		return 0
 	}
 	return w.mem.SwapTotalMB
+}
+
+func (w *systemMetricsWrapper) GetDiskUsedPercent() float64 {
+	if w.disk == nil {
+		return 0
+	}
+	return w.disk.UsedPercent
+}
+
+func (w *systemMetricsWrapper) GetDiskFreeGB() uint64 {
+	if w.disk == nil {
+		return 0
+	}
+	return w.disk.FreeGB
+}
+
+func (w *systemMetricsWrapper) GetGPUTempC() float64 {
+	if w.gpu == nil {
+		return 0
+	}
+	return w.gpu.TempC
+}
+
+func (w *systemMetricsWrapper) GetGPUAvailable() bool {
+	if w.gpu == nil {
+		return false
+	}
+	return w.gpu.Available
+}
+
+func (w *systemMetricsWrapper) GetNetworkInternetUp() bool {
+	if w.network == nil {
+		return true // Default to true if unavailable
+	}
+	return w.network.InternetUp
 }

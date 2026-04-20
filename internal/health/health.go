@@ -23,6 +23,11 @@ type SystemMetrics interface {
 	GetMemUsedPercent() float64
 	GetMemSwapUsedPercent() float64
 	GetMemSwapTotalMB() uint64
+	GetDiskUsedPercent() float64
+	GetDiskFreeGB() uint64
+	GetGPUTempC() float64
+	GetGPUAvailable() bool
+	GetNetworkInternetUp() bool
 }
 
 // AlertRule defines the interface for alert rules.
@@ -123,6 +128,119 @@ type AlertEvaluator struct {
 	activeAlerts map[string]*Alert // rule name -> alert
 }
 
+// DiskUsageRule detects disk space issues.
+type DiskUsageRule struct{}
+
+func NewDiskUsageRule() *DiskUsageRule {
+	return &DiskUsageRule{}
+}
+
+func (r *DiskUsageRule) Name() string {
+	return "disk_usage"
+}
+
+func (r *DiskUsageRule) Evaluate(metrics SystemMetrics) *Alert {
+	now := time.Now()
+	usedPercent := metrics.GetDiskUsedPercent()
+
+	// Critical: > 95%
+	if usedPercent > 95 {
+		return &Alert{
+			Rule:      r.Name(),
+			Severity:  "critical",
+			Message:   fmt.Sprintf("Disk critically full: %.1f%% used (pausing write-heavy agents)", usedPercent),
+			Since:     now,
+			UpdatedAt: now,
+		}
+	}
+
+	// High: > 90%
+	if usedPercent > 90 {
+		return &Alert{
+			Rule:      r.Name(),
+			Severity:  "high",
+			Message:   fmt.Sprintf("Disk space low: %.1f%% used", usedPercent),
+			Since:     now,
+			UpdatedAt: now,
+		}
+	}
+
+	return nil
+}
+
+// GPUThermalRule detects GPU overheating.
+type GPUThermalRule struct{}
+
+func NewGPUThermalRule() *GPUThermalRule {
+	return &GPUThermalRule{}
+}
+
+func (r *GPUThermalRule) Name() string {
+	return "gpu_thermal"
+}
+
+func (r *GPUThermalRule) Evaluate(metrics SystemMetrics) *Alert {
+	// Only evaluate if GPU is available
+	if !metrics.GetGPUAvailable() {
+		return nil
+	}
+
+	now := time.Now()
+	tempC := metrics.GetGPUTempC()
+
+	// Critical: > 85°C
+	if tempC > 85 {
+		return &Alert{
+			Rule:      r.Name(),
+			Severity:  "critical",
+			Message:   fmt.Sprintf("GPU overheating: %.1f°C (threshold: 85°C)", tempC),
+			Since:     now,
+			UpdatedAt: now,
+		}
+	}
+
+	// Medium: > 75°C
+	if tempC > 75 {
+		return &Alert{
+			Rule:      r.Name(),
+			Severity:  "medium",
+			Message:   fmt.Sprintf("GPU running hot: %.1f°C", tempC),
+			Since:     now,
+			UpdatedAt: now,
+		}
+	}
+
+	return nil
+}
+
+// NetworkDownRule detects network connectivity loss.
+type NetworkDownRule struct{}
+
+func NewNetworkDownRule() *NetworkDownRule {
+	return &NetworkDownRule{}
+}
+
+func (r *NetworkDownRule) Name() string {
+	return "network_down"
+}
+
+func (r *NetworkDownRule) Evaluate(metrics SystemMetrics) *Alert {
+	now := time.Now()
+
+	// Critical: Internet is down
+	if !metrics.GetNetworkInternetUp() {
+		return &Alert{
+			Rule:      r.Name(),
+			Severity:  "critical",
+			Message:   "Internet connectivity lost (pausing upload agents)",
+			Since:     now,
+			UpdatedAt: now,
+		}
+	}
+
+	return nil
+}
+
 // NewAlertEvaluator creates a new alert evaluator.
 func NewAlertEvaluator() *AlertEvaluator {
 	ae := &AlertEvaluator{
@@ -132,6 +250,9 @@ func NewAlertEvaluator() *AlertEvaluator {
 	// Register default rules
 	ae.RegisterRule(NewOOMRiskRule())
 	ae.RegisterRule(NewLoadSpikeRule())
+	ae.RegisterRule(NewDiskUsageRule())
+	ae.RegisterRule(NewGPUThermalRule())
+	ae.RegisterRule(NewNetworkDownRule())
 	return ae
 }
 

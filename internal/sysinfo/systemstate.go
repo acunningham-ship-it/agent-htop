@@ -20,6 +20,9 @@ type SystemState struct {
 type HostState struct {
 	CPU       CPUMetrics      `json:"cpu"`
 	Memory    MemoryMetrics   `json:"memory"`
+	Disk      DiskMetrics     `json:"disk"`
+	GPU       GPUMetrics      `json:"gpu"`
+	Network   NetworkMetrics  `json:"network"`
 	Uptime    UptimeInfo      `json:"uptime"`
 	Alerts    []*health.Alert `json:"alerts,omitempty"` // Health alerts (omitted if empty)
 	UpdatedAt time.Time       `json:"updatedAt"`
@@ -60,11 +63,34 @@ func (s *SystemState) GetMemSwapTotalMB() uint64 {
 	return s.Host.Memory.SwapTotalMB
 }
 
+func (s *SystemState) GetDiskUsedPercent() float64 {
+	return s.Host.Disk.UsedPercent
+}
+
+func (s *SystemState) GetDiskFreeGB() uint64 {
+	return s.Host.Disk.FreeGB
+}
+
+func (s *SystemState) GetGPUTempC() float64 {
+	return s.Host.GPU.TempC
+}
+
+func (s *SystemState) GetGPUAvailable() bool {
+	return s.Host.GPU.Available
+}
+
+func (s *SystemState) GetNetworkInternetUp() bool {
+	return s.Host.Network.InternetUp
+}
+
 // StateCollector aggregates all system collectors and provides cached snapshots.
 type StateCollector struct {
 	mu               sync.RWMutex
 	cpuCollector     *CPUCollector
 	memCollector     *MemoryCollector
+	diskCollector    *DiskCollector
+	gpuCollector     *GPUCollector
+	networkCollector *NetworkCollector
 	procCollector    *ProcessCollector
 	alertEvaluator   *health.AlertEvaluator
 	lastSnapshot     *SystemState
@@ -75,11 +101,14 @@ type StateCollector struct {
 // NewStateCollector creates a new unified state collector.
 func NewStateCollector(interval time.Duration, cacheTTL time.Duration) *StateCollector {
 	return &StateCollector{
-		cpuCollector:   NewCPUCollector(interval),
-		memCollector:   NewMemoryCollector(interval),
-		procCollector:  NewProcessCollector(interval),
-		alertEvaluator: health.NewAlertEvaluator(),
-		cacheTTL:       cacheTTL,
+		cpuCollector:     NewCPUCollector(interval),
+		memCollector:     NewMemoryCollector(interval),
+		diskCollector:    NewDiskCollector(interval),
+		gpuCollector:     NewGPUCollector(interval),
+		networkCollector: NewNetworkCollector(interval),
+		procCollector:    NewProcessCollector(interval),
+		alertEvaluator:   health.NewAlertEvaluator(),
+		cacheTTL:         cacheTTL,
 	}
 }
 
@@ -89,6 +118,15 @@ func (sc *StateCollector) Start() error {
 		return err
 	}
 	if err := sc.memCollector.Start(); err != nil {
+		return err
+	}
+	if err := sc.diskCollector.Start(); err != nil {
+		return err
+	}
+	if err := sc.gpuCollector.Start(); err != nil {
+		return err
+	}
+	if err := sc.networkCollector.Start(); err != nil {
 		return err
 	}
 	if err := sc.procCollector.Start(); err != nil {
@@ -101,6 +139,9 @@ func (sc *StateCollector) Start() error {
 func (sc *StateCollector) Stop() {
 	sc.cpuCollector.Stop()
 	sc.memCollector.Stop()
+	sc.diskCollector.Stop()
+	sc.gpuCollector.Stop()
+	sc.networkCollector.Stop()
 	sc.procCollector.Stop()
 }
 
@@ -128,6 +169,9 @@ func (sc *StateCollector) GetSnapshot() *SystemState {
 	hostState := HostState{
 		CPU:       *sc.cpuCollector.Get(),
 		Memory:    *sc.memCollector.Get(),
+		Disk:      *sc.diskCollector.Get(),
+		GPU:       *sc.gpuCollector.Get(),
+		Network:   *sc.networkCollector.Get(),
 		Uptime:    UptimeInfo{Seconds: uptime, UpdatedAt: now},
 		UpdatedAt: now,
 	}
