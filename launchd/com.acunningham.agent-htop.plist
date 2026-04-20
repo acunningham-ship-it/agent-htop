@@ -21,13 +21,13 @@
 	</dict>
 
 	<key>StandardOutPath</key>
-	<string>~/.config/agent-htop/daemon.log</string>
+	<string>$HOME/.config/agent-htop/daemon.log</string>
 
 	<key>StandardErrorPath</key>
-	<string>~/.config/agent-htop/daemon.log</string>
+	<string>$HOME/.config/agent-htop/daemon.log</string>
 
 	<key>WorkingDirectory</key>
-	<string>~</string>
+	<string>$HOME</string>
 
 	<key>Comment</key>
 	<string>Monitor AI Agent Fleets (Claude Code, Codex, Paperclip)</string>

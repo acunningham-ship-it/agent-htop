@@ -20,6 +20,7 @@ import (
 	"github.com/acunningham-ship-it/agent-htop/internal/aggregator"
 	"github.com/acunningham-ship-it/agent-htop/internal/api"
 	"github.com/acunningham-ship-it/agent-htop/internal/config"
+	// "github.com/acunningham-ship-it/agent-htop/internal/mcp" // TODO: Re-enable when aggregator interfaces are updated
 	"github.com/acunningham-ship-it/agent-htop/internal/notify"
 	"github.com/acunningham-ship-it/agent-htop/internal/parser"
 	"github.com/acunningham-ship-it/agent-htop/internal/ui"
@@ -182,13 +183,73 @@ func removePID() error {
 	return os.Remove(pidPath)
 }
 
-// setupDaemonLogging sets up log file for daemon
+// isDaemonRunning checks if a daemon process is currently running
+func isDaemonRunning() bool {
+	pid, err := readPID()
+	if err != nil {
+		return false
+	}
+
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+
+	// Signal 0 just checks if process exists
+	return proc.Signal(syscall.Signal(0)) == nil
+}
+
+// getSharedStateFile returns the path to the daemon's shared state file
+func getSharedStateFile() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".config", "agent-htop", "daemon.state.json"), nil
+}
+
+// rotateDaemonLog rotates daemon log files when they exceed size limit
+func rotateDaemonLog(logPath string) error {
+	info, err := os.Stat(logPath)
+	if err != nil {
+		return nil // Log file doesn't exist yet, that's fine
+	}
+
+	// Check if log file exceeds size limit
+	if info.Size() < daemonLogSize {
+		return nil // No rotation needed
+	}
+
+	// Rotate existing logs: daemon.log.2 -> daemon.log.3, daemon.log.1 -> daemon.log.2, daemon.log -> daemon.log.1
+	for i := daemonLogCount - 1; i >= 1; i-- {
+		oldPath := fmt.Sprintf("%s.%d", logPath, i)
+		newPath := fmt.Sprintf("%s.%d", logPath, i+1)
+		os.Rename(oldPath, newPath) // Ignore errors (file might not exist)
+	}
+
+	// Move current log to .1
+	return os.Rename(logPath, logPath+".1")
+}
+
+// setupDaemonLogging sets up log file for daemon with rotation support
 func setupDaemonLogging(verbose bool) (*os.File, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err
 	}
 	logPath := filepath.Join(home, daemonLogFile)
+
+	// Ensure config directory exists
+	logDir := filepath.Dir(logPath)
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		return nil, err
+	}
+
+	// Rotate log if it's too large
+	if err := rotateDaemonLog(logPath); err != nil {
+		return nil, err
+	}
+
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		return nil, err
@@ -403,6 +464,26 @@ func runDaemon(companyID, configPath, apiURL string, refreshMs int, runtimesStr,
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
+	// Periodically write state file so TUI can read it
+	stateFile, err := getSharedStateFile()
+	if err == nil {
+		stateDir := filepath.Dir(stateFile)
+		os.MkdirAll(stateDir, 0755) // Ensure directory exists
+	}
+
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	go func() {
+		for range ticker.C {
+			if stateFile != "" {
+				state := agg.GetFleetState()
+				data, _ := json.MarshalIndent(state, "", "  ")
+				os.WriteFile(stateFile, data, 0644) // Ignore errors
+			}
+		}
+	}()
+
 	// Wait for signal
 	<-sigChan
 	log.Printf("Received shutdown signal")
@@ -419,8 +500,21 @@ func runDaemon(companyID, configPath, apiURL string, refreshMs int, runtimesStr,
 		log.Printf("Error removing PID file: %v", err)
 	}
 
+	// Clean up state file
+	if stateFile != "" {
+		os.Remove(stateFile)
+	}
+
 	log.Printf("Daemon stopped")
 }
+
+// TODO: Re-enable cmdMCP when aggregator and anomaly detector interfaces are updated
+// // cmdMCP starts the MCP JSON-RPC 2.0 server for fleet control via supervisor agents.
+// func cmdMCP(companyID, configPath, apiURL string, verbose bool) {
+// 	// ... implementation disabled for now
+// }
+
+
 
 func main() {
 	// Determine subcommand from first argument
@@ -531,6 +625,13 @@ Examples:
 			return
 		}
 	}
+
+	// Handle MCP subcommand
+	// TODO: Re-enable MCP when aggregator/anomaly interfaces are updated
+	// if subcommand == "mcp" {
+	// 	cmdMCP(*companyID, *configPath, *apiURL, *verbose)
+	// 	return
+	// }
 
 	// Load or create config
 	cfg, cfgPath, err := config.LoadOrCreate(*configPath)
