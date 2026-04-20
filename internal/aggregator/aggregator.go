@@ -20,6 +20,7 @@ import (
 type FleetState struct {
 	Agents      []*AgentView
 	HostMetrics *HostMetrics
+	Processes   []*sysinfo.ProcessInfo
 	UpdatedAt   time.Time
 }
 
@@ -55,8 +56,9 @@ type Aggregator struct {
 	detector    *anomaly.Detector
 	runtimes    map[parser.Runtime]bool // Which runtimes to include
 
-	cpuCollector    *sysinfo.CPUCollector
-	memoryCollector *sysinfo.MemoryCollector
+	cpuCollector     *sysinfo.CPUCollector
+	memoryCollector  *sysinfo.MemoryCollector
+	processCollector *sysinfo.ProcessCollector
 
 	mu              sync.RWMutex
 	fleetState      *FleetState
@@ -82,20 +84,21 @@ func NewAggregatorWithRuntimes(companyID, logDir string, agentNamer AgentNamer, 
 	}
 
 	return &Aggregator{
-		companyID:       companyID,
-		logDir:          logDir,
-		agentNamer:      agentNamer,
-		watcher:         w,
-		detector:        anomaly.NewDetector(),
-		runtimes:        runtimeMap,
-		cpuCollector:    sysinfo.NewCPUCollector(time.Second),
-		memoryCollector: sysinfo.NewMemoryCollector(time.Second),
-		fleetState:      &FleetState{Agents: make([]*AgentView, 0), HostMetrics: &HostMetrics{}},
-		costTrackers:    make(map[string]*AgentCostTracker),
-		dailyAverages:   make(map[string][]float64),
-		runHistory:      make([]*parser.AgentRun, 0),
-		stateCh:         make(chan *FleetState, 10),
-		stopCh:          make(chan struct{}),
+		companyID:        companyID,
+		logDir:           logDir,
+		agentNamer:       agentNamer,
+		watcher:          w,
+		detector:         anomaly.NewDetector(),
+		runtimes:         runtimeMap,
+		cpuCollector:     sysinfo.NewCPUCollector(time.Second),
+		memoryCollector:  sysinfo.NewMemoryCollector(time.Second),
+		processCollector: sysinfo.NewProcessCollector(time.Second),
+		fleetState:       &FleetState{Agents: make([]*AgentView, 0), HostMetrics: &HostMetrics{}, Processes: make([]*sysinfo.ProcessInfo, 0)},
+		costTrackers:     make(map[string]*AgentCostTracker),
+		dailyAverages:    make(map[string][]float64),
+		runHistory:       make([]*parser.AgentRun, 0),
+		stateCh:          make(chan *FleetState, 10),
+		stopCh:           make(chan struct{}),
 	}
 }
 
@@ -107,6 +110,9 @@ func (a *Aggregator) Start(ctx context.Context) error {
 	}
 	if err := a.memoryCollector.Start(); err != nil {
 		fmt.Printf("[aggregator] Warning: failed to start memory collector: %v\n", err)
+	}
+	if err := a.processCollector.Start(); err != nil {
+		fmt.Printf("[aggregator] Warning: failed to start process collector: %v\n", err)
 	}
 
 	// Start background goroutines FIRST so they can drain the anomaly event channel during log loading
@@ -401,6 +407,11 @@ func (a *Aggregator) updateFleetState(ctx context.Context, run *parser.AgentRun)
 	a.fleetState.HostMetrics.CPU = a.cpuCollector.Get()
 	a.fleetState.HostMetrics.Memory = a.memoryCollector.Get()
 
+	// Update process list
+	procList := a.processCollector.Get()
+	a.fleetState.Processes = make([]*sysinfo.ProcessInfo, len(procList.Processes))
+	copy(a.fleetState.Processes, procList.Processes)
+
 	// Broadcast updated state (non-blocking - skip if nobody is listening)
 	select {
 	case a.stateCh <- a.fleetState:
@@ -593,6 +604,7 @@ func (a *Aggregator) Stop() {
 	a.detector.Stop()
 	a.cpuCollector.Stop()
 	a.memoryCollector.Stop()
+	a.processCollector.Stop()
 	a.wg.Wait()
 }
 
