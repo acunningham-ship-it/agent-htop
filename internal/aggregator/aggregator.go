@@ -107,6 +107,15 @@ func NewAggregatorWithRuntimes(companyID, logDir string, agentNamer AgentNamer, 
 	}
 }
 
+// SetPolicyEngine sets the policy engine for this aggregator.
+func (a *Aggregator) SetPolicyEngine(engine PolicyEvaluator) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if engine != nil {
+		a.policyEngine = engine
+	}
+}
+
 // Start begins aggregating fleet state.
 func (a *Aggregator) Start(ctx context.Context) error {
 	// Start system metrics collectors

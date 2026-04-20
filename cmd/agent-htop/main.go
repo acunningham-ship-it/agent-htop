@@ -374,6 +374,16 @@ func runDaemon(companyID, configPath, apiURL string, refreshMs int, runtimesStr,
 	dashboardURL := fmt.Sprintf("%s/fleet/%s", cfg.APIURL, companyID)
 	discordNotifier := notify.NewNotifier(cfg.DiscordWebhook, dashboardURL, notify.AlertLevel(alertLevel))
 
+	// Setup policies
+	if len(cfg.Policies) > 0 {
+		policyEngine, err := setupPolicies(ctx, &cfg, apiClient, discordNotifier)
+		if err != nil {
+			log.Fatalf("Failed to setup policies: %v", err)
+		}
+		agg.SetPolicyEngine(policyEngine)
+		log.Printf("Loaded %d policies", len(cfg.Policies))
+	}
+
 	// Start watcher
 	if err := w.Start(ctx); err != nil {
 		log.Fatalf("Failed to start watcher: %v", err)
