@@ -1064,6 +1064,47 @@ func (s *Server) handleGetNetworkState(params json.RawMessage) (interface{}, *JS
 	}, nil
 }
 
+// handleGetGPUMetrics returns current GPU metrics.
+func (s *Server) handleGetGPUMetrics(params json.RawMessage) (interface{}, *JSONRPCErr) {
+	state := s.agg.GetSystemState()
+	if state == nil {
+		return nil, &JSONRPCErr{
+			Code:    -32603,
+			Message: "Internal error",
+			Data:    "system state unavailable",
+		}
+	}
+
+	type GPUInfo struct {
+		Name      string  `json:"name"`
+		Index     int     `json:"index"`
+		UtilPct   float64 `json:"util_pct"`
+		TempC     float64 `json:"temp_c"`
+		VRAMUsed  uint64  `json:"vram_used_mb"`
+		VRAMTotal uint64  `json:"vram_total_mb"`
+		PowerDraw float64 `json:"power_draw_w"`
+	}
+
+	gpus := make([]*GPUInfo, len(state.Host.GPU.GPUs))
+	for i, gpu := range state.Host.GPU.GPUs {
+		gpus[i] = &GPUInfo{
+			Name:      gpu.Name,
+			Index:     gpu.Index,
+			UtilPct:   gpu.UtilPct,
+			TempC:     gpu.TempC,
+			VRAMUsed:  gpu.VRAMUsed,
+			VRAMTotal: gpu.VRAMTotal,
+			PowerDraw: gpu.PowerDraw,
+		}
+	}
+
+	return map[string]interface{}{
+		"available": state.Host.GPU.Available,
+		"gpus":      gpus,
+		"timestamp": state.Host.GPU.UpdatedAt,
+	}, nil
+}
+
 // handleTestConnectivity tests connectivity to one or more hosts using ping.
 func (s *Server) handleTestConnectivity(params json.RawMessage) (interface{}, *JSONRPCErr) {
 	var req struct {

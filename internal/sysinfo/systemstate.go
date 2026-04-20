@@ -72,11 +72,14 @@ func (s *SystemState) GetDiskFreeGB() uint64 {
 }
 
 func (s *SystemState) GetGPUTempC() float64 {
-	return s.Host.GPU.TempC
+	if len(s.Host.GPU.GPUs) > 0 {
+		return s.Host.GPU.GPUs[0].TempC
+	}
+	return 0
 }
 
 func (s *SystemState) GetGPUAvailable() bool {
-	return s.Host.GPU.Available
+	return s.Host.GPU.Available && len(s.Host.GPU.GPUs) > 0
 }
 
 func (s *SystemState) GetNetworkInternetUp() bool {
@@ -226,12 +229,26 @@ func (sc *StateCollector) cloneSnapshot(state *SystemState) *SystemState {
 		copy(alertsCopy, state.Host.Alerts)
 	}
 
+	// Clone GPU metrics
+	gpuCopy := state.Host.GPU
+	if gpuCopy.GPUs != nil {
+		gpusCopy := make([]*GPU, len(gpuCopy.GPUs))
+		for i, gpu := range gpuCopy.GPUs {
+			gpuCopy := *gpu
+			gpusCopy[i] = &gpuCopy
+		}
+		gpuCopy.GPUs = gpusCopy
+	}
+
 	return &SystemState{
 		SchemaVersion: state.SchemaVersion,
 		Timestamp:     state.Timestamp,
 		Host: HostState{
 			CPU:        cpuCopy,
 			Memory:     state.Host.Memory,
+			Disk:       state.Host.Disk,
+			GPU:        gpuCopy,
+			Network:    state.Host.Network,
 			Uptime:     state.Host.Uptime,
 			Alerts:     alertsCopy,
 			UpdatedAt:  state.Host.UpdatedAt,

@@ -1234,8 +1234,8 @@ func (m *Model) renderProjectionLine() string {
 	return lipgloss.NewStyle().Foreground(colorCode).Render(line)
 }
 
-// renderSystemMetrics builds a line showing host CPU, RAM, load, and network metrics.
-// Format: "  CPU 34.2% | RAM 6.2/16.0 GB | Load 1.2 2.3 3.1 | eth0 ↑4.2MB/s ↓12.1MB/s"
+// renderSystemMetrics builds a line showing host CPU, RAM, load, network, and GPU metrics.
+// Format: "  CPU 34.2% | RAM 6.2/16.0 GB | Load 1.2 2.3 3.1 | eth0 ↑4.2MB/s ↓12.1MB/s | GPU0 45% 62°C"
 func (m *Model) renderSystemMetrics() string {
 	if m.fleet == nil || m.fleet.HostMetrics == nil {
 		return ""
@@ -1257,6 +1257,14 @@ func (m *Model) renderSystemMetrics() string {
 		netStr := formatNetworkMetrics(m.fleet.HostMetrics.Network)
 		if netStr != "" {
 			parts = append(parts, netStr)
+		}
+	}
+
+	// Add GPU metrics if available
+	if m.fleet.HostMetrics.GPU != nil && len(m.fleet.HostMetrics.GPU.GPUs) > 0 {
+		gpuStr := formatGPUMetrics(m.fleet.HostMetrics.GPU)
+		if gpuStr != "" {
+			parts = append(parts, gpuStr)
 		}
 	}
 
@@ -1292,6 +1300,46 @@ func formatNetworkMetrics(net *sysinfo.NetworkMetrics) string {
 	if net.WiFi != nil && net.WiFi.Connected {
 		wifiStr := fmt.Sprintf("wifi: %s %ddBm", net.WiFi.SSID, net.WiFi.SignalDBm)
 		parts = append(parts, wifiStr)
+	}
+
+	return strings.Join(parts, " | ")
+}
+
+// formatGPUMetrics formats GPU metrics into a compact display string.
+// Example: "GPU0 45% 62°C" or "GPU0 45% 7.2/8.0GB 62°C 65W" for detailed view
+func formatGPUMetrics(gpuMetrics *sysinfo.GPUMetrics) string {
+	if gpuMetrics == nil || len(gpuMetrics.GPUs) == 0 {
+		return ""
+	}
+
+	var parts []string
+	for _, gpu := range gpuMetrics.GPUs {
+		if gpu == nil {
+			continue
+		}
+
+		// Build a concise GPU string: "GPU0 45% 62°C"
+		// Extended: "GPU0 45% 7.2/8.0GB 62°C 65W"
+		gpuStr := fmt.Sprintf("GPU%d %.0f%%", gpu.Index, gpu.UtilPct)
+
+		// Add VRAM info if available
+		if gpu.VRAMTotal > 0 {
+			vramUsedGB := float64(gpu.VRAMUsed) / 1024.0
+			vramTotalGB := float64(gpu.VRAMTotal) / 1024.0
+			gpuStr += fmt.Sprintf(" %.1f/%.1fGB", vramUsedGB, vramTotalGB)
+		}
+
+		// Add temperature
+		if gpu.TempC > 0 {
+			gpuStr += fmt.Sprintf(" %.0f°C", gpu.TempC)
+		}
+
+		// Add power draw if available
+		if gpu.PowerDraw > 0 {
+			gpuStr += fmt.Sprintf(" %.0fW", gpu.PowerDraw)
+		}
+
+		parts = append(parts, gpuStr)
 	}
 
 	return strings.Join(parts, " | ")

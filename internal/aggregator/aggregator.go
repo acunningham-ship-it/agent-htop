@@ -31,6 +31,7 @@ type HostMetrics struct {
 	CPU     *sysinfo.CPUMetrics
 	Memory  *sysinfo.MemoryMetrics
 	Network *sysinfo.NetworkMetrics
+	GPU     *sysinfo.GPUMetrics
 }
 
 // PolicyEvaluator evaluates policies against session context.
@@ -447,9 +448,11 @@ func (a *Aggregator) updateFleetState(ctx context.Context, run *parser.AgentRun)
 	cpuMetrics := a.cpuCollector.Get()
 	memMetrics := a.memoryCollector.Get()
 	networkMetrics := a.networkCollector.Get()
+	gpuMetrics := a.gpuCollector.Get()
 	a.fleetState.HostMetrics.CPU = cpuMetrics
 	a.fleetState.HostMetrics.Memory = memMetrics
 	a.fleetState.HostMetrics.Network = networkMetrics
+	a.fleetState.HostMetrics.GPU = gpuMetrics
 
 	// Evaluate health alerts
 	a.evaluateAlerts(cpuMetrics, memMetrics)
@@ -1144,17 +1147,17 @@ func (w *systemMetricsWrapper) GetDiskFreeGB() uint64 {
 }
 
 func (w *systemMetricsWrapper) GetGPUTempC() float64 {
-	if w.gpu == nil {
+	if w.gpu == nil || len(w.gpu.GPUs) == 0 {
 		return 0
 	}
-	return w.gpu.TempC
+	return w.gpu.GPUs[0].TempC
 }
 
 func (w *systemMetricsWrapper) GetGPUAvailable() bool {
 	if w.gpu == nil {
 		return false
 	}
-	return w.gpu.Available
+	return w.gpu.Available && len(w.gpu.GPUs) > 0
 }
 
 func (w *systemMetricsWrapper) GetNetworkInternetUp() bool {
