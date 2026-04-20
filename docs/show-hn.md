@@ -1,51 +1,53 @@
-# Show HN: agent-htop — Live Terminal Dashboard for AI Agent Fleets
+# Show HN: agent-htop — live terminal dashboard for Claude Code sessions
 
-## The Problem
+I was running several Claude Code agents overnight on a side project. Woke up to a larger bill than expected and no quick way to see which session caused it. The logs are buried in `~/.claude/projects/`, costs are scattered across JSON, and there's no live view.
 
-I was running 20+ Claude Code agents overnight for a side project. Woke up the next morning to a $40 API bill and no idea which agent caused it. The logs are buried in directories, cost is scattered across JSON, and there's no way to immediately kill a runaway agent without SSH'ing and hunting through processes.
-
-## The Solution
-
-**agent-htop** is `htop` for your AI agent fleet. A single Go binary that gives you real-time visibility and instant control:
+So I built agent-htop.
 
 ```
-agent-htop  v0.1.0   agents: 5   running: 3   cost today: $0.42   [q]uit [K]ill
+agent-htop  v0.2.0   sessions: 3   running: 2   cost today: $0.42   [q]uit
 
-  NAME                STATUS   MODEL        TOKENS IN  TOKENS OUT  COST     ELAPSED   LAST TOOL
-  ──────────────────────────────────────────────────────────────────────────────────────────────
-  BackendEngineer     running  haiku-4-5      142,310       8,421  $0.0234  12m 34s   Bash
-  TUIEngineer         running  haiku-4-5       98,002       6,103  $0.0171   8m 12s   Write
-  QALaunch            running  gemini-flash    43,118       2,940  $0.0000   3m 07s   Read
-  Researcher          idle     gemini-flash    89,442       5,217  $0.0000       -    -
-  CEO                 idle     sonnet-4-6      21,003       1,882  $0.0412       -    -
+  NAME                           STATUS   MODEL         TOKENS IN  TOKENS OUT  COST     ELAPSED   LAST TOOL
+  ────────────────────────────────────────────────────────────────────────────────────────────────────────
+  -home-armani-projects-fnaf     running  claude-sonnet   142,310       8,421  $0.0234  12m 34s   Bash
+  -home-armani-projects-api      running  claude-haiku     98,002       6,103  $0.0171   8m 12s   Write
+  -home-armani-projects-web      idle     claude-haiku     43,118       2,940  $0.0041   3m 07s   Read
 ```
 
-**Features:**
-- **Real-time cost tracking** per agent (see exactly what's burning money)
-- **Instant kill** — press `K` on a runaway agent and it's gone
-- **One-liner install:** `go install github.com/acunningham-ship-it/agent-htop/cmd/agent-htop@latest`
-- **Works with Claude Code, Codex, Paperclip** — and single-binary deployment (11MB)
+It's a single Go binary that auto-discovers your Claude Code sessions from `~/.claude/projects/**/*.jsonl` and shows them in a live-updating table. Cost and token counts update in real time as the sessions run.
 
-## How It Works
+**Install:**
 
-1. `agent-htop --company <id>` — connects to your local Paperclip instance
-2. Live-streams agent status, tokens, cost, and elapsed time
-3. Keyboard control: arrows/vim keys to navigate, `K` to kill, `q` to quit
+```bash
+go install github.com/acunningham-ship-it/agent-htop/cmd/agent-htop@latest
+# or
+brew install acunningham-ship-it/tap/agent-htop
+```
 
-The binary watches your Paperclip logs in real-time. No API calls needed once it starts (graceful fallback if offline).
+**Run:**
 
-## Why This Matters
+```bash
+agent-htop   # no flags needed, finds Claude Code sessions automatically
+```
 
-AI agents are now as much of an operational liability as they are a feature. If you're running more than one agent in production—especially with Claude—you need visibility into what they're doing and how fast they're burning tokens.
+**What it tracks:**
+- Tokens in / out per session
+- Cost in real-time (uses Anthropic's pricing table)
+- Elapsed time and last tool call
+- Anomaly flags for runaway spend or error streaks
+- Optional Discord webhook for alerts when you're not watching
 
-This fills that gap.
+**Paperclip support (additive):** If you run a Paperclip agent fleet, pass `--company <id>` and your Paperclip agents appear in the same table with kill/pause control (`K` / `P` keys). Otherwise it's purely local file-watching — no API required.
 
-## Links
+Built it as a single Go binary using bubbletea for the TUI. Works on Linux and macOS. The binary is ~11MB.
 
-- **GitHub:** https://github.com/acunningham-ship-it/agent-htop
-- **Install:** `go install github.com/acunningham-ship-it/agent-htop/cmd/agent-htop@latest`
-- **Homebrew (coming soon):** Will be available at acunningham-ship-it/homebrew-tap
+**Links:**
+- GitHub: https://github.com/acunningham-ship-it/agent-htop
+- Homebrew: `brew install acunningham-ship-it/tap/agent-htop`
+
+I'm 17 and this is a tool I actually use daily. Happy to answer questions or take feedback.
 
 ---
 
-Built in 4 weeks as a single Go binary. I'm 17 and building the tools I actually use.
+**Cross-post targets:** r/golang, r/commandline, r/ClaudeAI  
+**Best timing:** Tuesday 8–10am US-East

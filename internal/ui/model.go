@@ -639,23 +639,74 @@ func (m *Model) renderHeader() string {
 		searchStr,
 	)
 
-	// Optional second line: show company ID if --company was set
-	var companyLine string
-	if m.companyID != "" {
-		companyLine = fmt.Sprintf("  Paperclip: %s\n", m.companyID)
-		// Style the company line as dimmed
-		companyLine = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("8")).
-			Render(companyLine)
-	}
-
 	// Style the header
 	mainHeader := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color("12")).
 		Render(header)
 
-	return mainHeader + companyLine
+	// Optional second line: show company ID if --company was set
+	var companyLine string
+	if m.companyID != "" {
+		companyLine = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("8")).
+			Render(fmt.Sprintf("  Paperclip: %s\n", m.companyID))
+	}
+
+	// Cost projection line (shown when any agent has projection data)
+	projectionLine := m.renderProjectionLine()
+
+	return mainHeader + companyLine + projectionLine
+}
+
+// renderProjectionLine builds the fleet-wide cost projection footer line.
+// Format: "  today: $0.42 → projected $2.80 by midnight (at 3.0× daily avg)"
+// Color: green ≤1×, yellow 1-2×, red >2× daily average.
+func (m *Model) renderProjectionLine() string {
+	var spentToday, projectedToday, dailyAvgTotal float64
+	hasProjection := false
+
+	for _, agent := range m.fleet.Agents {
+		if agent.Projection == nil {
+			continue
+		}
+		hasProjection = true
+		spentToday += agent.Projection.SpentToday
+		projectedToday += agent.Projection.ProjectedToday
+		dailyAvgTotal += agent.Projection.DailyAverage
+	}
+
+	if !hasProjection {
+		// No projection data yet — show bare today cost
+		line := fmt.Sprintf("  today: $%.4f\n", 0.0)
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(line)
+	}
+
+	// Determine color based on projected vs daily average
+	var colorCode lipgloss.Color
+	var multiplier float64
+	if dailyAvgTotal > 0 {
+		multiplier = projectedToday / dailyAvgTotal
+	}
+	switch {
+	case dailyAvgTotal == 0 || multiplier <= 1.0:
+		colorCode = lipgloss.Color("2") // green
+	case multiplier <= 2.0:
+		colorCode = lipgloss.Color("3") // yellow
+	default:
+		colorCode = lipgloss.Color("1") // red
+	}
+
+	var line string
+	if dailyAvgTotal > 0 {
+		line = fmt.Sprintf("  today: $%.4f → projected $%.4f by midnight (at %.1f× daily avg)\n",
+			spentToday, projectedToday, multiplier)
+	} else {
+		line = fmt.Sprintf("  today: $%.4f → projected $%.4f by midnight\n",
+			spentToday, projectedToday)
+	}
+
+	return lipgloss.NewStyle().Foreground(colorCode).Render(line)
 }
 
 // StateUpdateMsg is a message containing a state update from the aggregator.
