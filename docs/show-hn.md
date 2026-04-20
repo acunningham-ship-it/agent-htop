@@ -16,6 +16,10 @@ agent-htop  v0.2.0   sessions: 3   running: 2   cost today: $0.42   [q]uit
 
 It's a single Go binary that auto-discovers your Claude Code sessions from `~/.claude/projects/**/*.jsonl` and shows them in a live-updating table. Cost and token counts update in real time as the sessions run.
 
+**Watch the demo:** `asciinema play agent-htop-demo.cast` (20 seconds)
+
+Or view the animated recording on asciinema.org.
+
 **Install:**
 
 ```bash

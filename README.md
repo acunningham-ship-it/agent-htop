@@ -2,6 +2,16 @@
 
 Real-time terminal dashboard for Claude Code sessions, Paperclip agent fleets, and more. Monitor costs, tokens, and agent status without leaving the terminal.
 
+## Demo
+
+[![Demo](https://asciinema.org/a/placeholder.svg)](https://asciinema.org/a/placeholder)
+
+Or watch the recording in your terminal:
+
+```bash
+asciinema play agent-htop-demo.cast
+```
+
 ```
 agent-htop  v0.2.0   sessions: 3   running: 2   cost today: $0.42   [q]uit
 
@@ -11,6 +21,8 @@ agent-htop  v0.2.0   sessions: 3   running: 2   cost today: $0.42   [q]uit
   -home-armani-projects-api      running  claude-haiku     98,002       6,103  $0.0171   8m 12s   Write
   -home-armani-projects-web      idle     claude-haiku     43,118       2,940  $0.0041   3m 07s   Read
 ```
+
+**In the demo:** Navigate sessions with `j`/`k`, filter with `f`, sort by cost with `s`, and quit with `q`.
 
 ## Install
 

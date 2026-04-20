@@ -526,6 +526,16 @@ func (m *Model) View() string {
 		return "Goodbye!\n"
 	}
 
+	// Show help overlay if requested
+	if m.showHelp {
+		return m.renderHelpOverlay()
+	}
+
+	// Show empty state if no agents detected
+	if len(m.fleet.Agents) == 0 {
+		return m.renderEmptyState()
+	}
+
 	header := m.renderHeader()
 
 	var tableView string
