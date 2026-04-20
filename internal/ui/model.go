@@ -91,6 +91,10 @@ type Model struct {
 
 	// Runtime detection results
 	runtimeStatus map[string]bool // runtime name -> detected (true/false)
+
+	// Alert state
+	lastAlertTime    time.Time
+	alertFlashCycle  int // 0-2 for flashing effect (0 = show, 1 = dim, 2 = show, repeat)
 }
 
 // New creates a new TUI model.
@@ -142,7 +146,7 @@ func (m *Model) initTable() {
 		{Title: "TOKENS OUT", Width: 12},
 		{Title: "COST", Width: 10},
 		{Title: "ELAPSED", Width: 10},
-		{Title: "LAST TOOL", Width: 20},
+		{Title: "TASK", Width: 35},
 	}
 
 	rows := m.buildTableRows()
@@ -178,7 +182,7 @@ func (m *Model) buildTableRows() []table.Row {
 		status := m.colorStatus(agent.Status, agent.IsError)
 		model := truncate(agent.Model, 15)
 		elapsed := formatElapsed(agent.ElapsedMS, agent.Status)
-		lastTool := truncate(agent.LastTool, 20)
+		task := formatCurrentTask(agent.CurrentTask)
 		cost := fmt.Sprintf("$%.4f", agent.TotalCostUSD)
 
 		rows = append(rows, table.Row{
@@ -189,7 +193,7 @@ func (m *Model) buildTableRows() []table.Row {
 			fmt.Sprintf("%d", agent.OutputTokens),
 			cost,
 			elapsed,
-			lastTool,
+			task,
 		})
 	}
 	return rows
@@ -321,6 +325,28 @@ func formatSinceUpdate(updatedAt time.Time) string {
 	minutes := seconds / 60
 	secs := seconds % 60
 	return fmt.Sprintf("%dm %ds", minutes, secs)
+}
+
+// formatCurrentTask formats the current task for display in the TUI table.
+// Returns strings like "Reading README.md (4s)" or "STALLED: Bash (30s+)".
+func formatCurrentTask(task *parser.CurrentTask) string {
+	if task == nil {
+		return "-"
+	}
+
+	if task.IsStalled {
+		return fmt.Sprintf("STALLED: %s (%ds+)", task.ToolName, task.ElapsedSec)
+	}
+
+	// Format: "ToolName: args (Xs)"
+	var display string
+	if task.ArgsSummary != "" {
+		display = fmt.Sprintf("%s: %s (%ds)", task.ToolName, task.ArgsSummary, task.ElapsedSec)
+	} else {
+		display = fmt.Sprintf("%s (%ds)", task.ToolName, task.ElapsedSec)
+	}
+
+	return truncate(display, 35)
 }
 
 // truncate truncates a string to max length.
@@ -864,13 +890,16 @@ func (m *Model) renderHeader() string {
 			Render(fmt.Sprintf("  Paperclip: %s\n", m.companyID))
 	}
 
+	// Alert banner (shown when health alerts are active)
+	alertBanner := m.renderAlertBanner()
+
 	// Cost projection line (shown when any agent has projection data)
 	projectionLine := m.renderProjectionLine()
 
 	// System metrics line (CPU, RAM, load)
 	systemLine := m.renderSystemMetrics()
 
-	return mainHeader + companyLine + systemLine + projectionLine
+	return mainHeader + companyLine + alertBanner + systemLine + projectionLine
 }
 
 // renderProjectionLine builds the fleet-wide cost projection footer line.
@@ -942,6 +971,88 @@ func (m *Model) renderSystemMetrics() string {
 
 	line := fmt.Sprintf("  %s | %s | %s\n", cpuStr, ramStr, loadStr)
 	return lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(line)
+}
+
+// renderAlertBanner renders active health alerts with flashing effect for critical alerts.
+func (m *Model) renderAlertBanner() string {
+	alerts := m.aggregator.GetActiveAlerts()
+	if len(alerts) == 0 {
+		return ""
+	}
+
+	// Update flash cycle for animation (flashes every 300ms)
+	now := time.Now()
+	if m.lastAlertTime.IsZero() {
+		m.lastAlertTime = now
+	}
+	elapsed := now.Sub(m.lastAlertTime)
+	m.alertFlashCycle = int((elapsed.Milliseconds() / 300) % 3)
+
+	// Build alert message from highest severity alert
+	var criticalAlert, highAlert, mediumAlert *string
+	for _, alert := range alerts {
+		msg := alert.Message
+		switch alert.Severity {
+		case "critical":
+			if criticalAlert == nil {
+				criticalAlert = &msg
+			}
+		case "high":
+			if highAlert == nil {
+				highAlert = &msg
+			}
+		case "medium":
+			if mediumAlert == nil {
+				mediumAlert = &msg
+			}
+		}
+	}
+
+	var severity, message string
+	if criticalAlert != nil {
+		severity = "critical"
+		message = *criticalAlert
+	} else if highAlert != nil {
+		severity = "high"
+		message = *highAlert
+	} else if mediumAlert != nil {
+		severity = "medium"
+		message = *mediumAlert
+	} else {
+		return ""
+	}
+
+	// Build the alert banner with icon
+	icon := "[!]"
+	if severity == "critical" {
+		// Flash effect for critical alerts
+		if m.alertFlashCycle == 0 {
+			icon = "[!!!]"
+		} else {
+			icon = "     "
+		}
+	}
+
+	alertMsg := fmt.Sprintf("%s %s: %s", icon, strings.ToUpper(severity), message)
+
+	// Color based on severity
+	var style lipgloss.Style
+	switch severity {
+	case "critical":
+		style = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("15")).
+			Background(lipgloss.Color("196"))
+	case "high":
+		style = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("0")).
+			Background(lipgloss.Color("226"))
+	default:
+		style = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("16")).
+			Background(lipgloss.Color("226"))
+	}
+
+	return style.Render(fmt.Sprintf("  %s\n", alertMsg))
 }
 
 // renderHelpOverlay renders the help screen with keybindings and runtime detection status.

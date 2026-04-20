@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/acunningham-ship-it/agent-htop/internal/anomaly"
+	"github.com/acunningham-ship-it/agent-htop/internal/health"
 	"github.com/acunningham-ship-it/agent-htop/internal/parser"
 	"github.com/acunningham-ship-it/agent-htop/internal/sysinfo"
 	"github.com/acunningham-ship-it/agent-htop/internal/watcher"
@@ -61,6 +62,7 @@ type Aggregator struct {
 	cpuCollector     *sysinfo.CPUCollector
 	memoryCollector  *sysinfo.MemoryCollector
 	processCollector *sysinfo.ProcessCollector
+	alertEvaluator   *health.AlertEvaluator
 
 	mu              sync.RWMutex
 	fleetState      *FleetState
@@ -95,6 +97,7 @@ func NewAggregatorWithRuntimes(companyID, logDir string, agentNamer AgentNamer, 
 		cpuCollector:     sysinfo.NewCPUCollector(time.Second),
 		memoryCollector:  sysinfo.NewMemoryCollector(time.Second),
 		processCollector: sysinfo.NewProcessCollector(time.Second),
+		alertEvaluator:   health.NewAlertEvaluator(),
 		fleetState:       &FleetState{Agents: make([]*AgentView, 0), HostMetrics: &HostMetrics{}, Processes: make([]*sysinfo.ProcessInfo, 0)},
 		costTrackers:     make(map[string]*AgentCostTracker),
 		dailyAverages:    make(map[string][]float64),
@@ -408,8 +411,13 @@ func (a *Aggregator) updateFleetState(ctx context.Context, run *parser.AgentRun)
 	if a.fleetState.HostMetrics == nil {
 		a.fleetState.HostMetrics = &HostMetrics{}
 	}
-	a.fleetState.HostMetrics.CPU = a.cpuCollector.Get()
-	a.fleetState.HostMetrics.Memory = a.memoryCollector.Get()
+	cpuMetrics := a.cpuCollector.Get()
+	memMetrics := a.memoryCollector.Get()
+	a.fleetState.HostMetrics.CPU = cpuMetrics
+	a.fleetState.HostMetrics.Memory = memMetrics
+
+	// Evaluate health alerts
+	a.evaluateAlerts(cpuMetrics, memMetrics)
 
 	// Update process list
 	procList := a.processCollector.Get()
@@ -925,4 +933,71 @@ func truncateArg(arg string, maxLen int) string {
 		return arg
 	}
 	return arg[:maxLen-3] + "..."
+}
+
+// evaluateAlerts evaluates health alerts based on current system metrics.
+func (a *Aggregator) evaluateAlerts(cpu *sysinfo.CPUMetrics, mem *sysinfo.MemoryMetrics) {
+	// Create a simple metrics wrapper to satisfy the health.SystemMetrics interface
+	metrics := &systemMetricsWrapper{cpu: cpu, mem: mem}
+	a.alertEvaluator.Evaluate(metrics)
+}
+
+// GetActiveAlerts returns the current active health alerts.
+func (a *Aggregator) GetActiveAlerts() []*health.Alert {
+	return a.alertEvaluator.GetActiveAlerts()
+}
+
+// systemMetricsWrapper wraps system metrics to satisfy health.SystemMetrics interface
+type systemMetricsWrapper struct {
+	cpu *sysinfo.CPUMetrics
+	mem *sysinfo.MemoryMetrics
+}
+
+func (w *systemMetricsWrapper) GetCPULoad1Min() float64 {
+	if w.cpu == nil {
+		return 0
+	}
+	return w.cpu.Load1Min
+}
+
+func (w *systemMetricsWrapper) GetCPULogicalCores() int {
+	if w.cpu == nil {
+		return 0
+	}
+	return w.cpu.LogicalCores
+}
+
+func (w *systemMetricsWrapper) GetMemAvailableMB() uint64 {
+	if w.mem == nil {
+		return 0
+	}
+	return w.mem.AvailableMB
+}
+
+func (w *systemMetricsWrapper) GetMemTotalMB() uint64 {
+	if w.mem == nil {
+		return 0
+	}
+	return w.mem.TotalMB
+}
+
+func (w *systemMetricsWrapper) GetMemUsedPercent() float64 {
+	if w.mem == nil {
+		return 0
+	}
+	return w.mem.UsedPercent
+}
+
+func (w *systemMetricsWrapper) GetMemSwapUsedPercent() float64 {
+	if w.mem == nil {
+		return 0
+	}
+	return w.mem.SwapUsedPercent
+}
+
+func (w *systemMetricsWrapper) GetMemSwapTotalMB() uint64 {
+	if w.mem == nil {
+		return 0
+	}
+	return w.mem.SwapTotalMB
 }

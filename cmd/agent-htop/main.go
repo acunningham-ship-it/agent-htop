@@ -667,28 +667,48 @@ Examples:
 			case <-ticker.C:
 				if *jsonOutput {
 					// Output JSON snapshot
-					var output interface{}
+					var exitCode int
 					if *fullOutput {
 						// Full output: complete system state
-						output = agg.GetSystemState()
+						systemState := agg.GetSystemState()
+						data, err := json.MarshalIndent(systemState, "", "  ")
+						if err != nil {
+							fmt.Fprintf(os.Stderr, "Error marshaling JSON: %v\n", err)
+							agg.Stop()
+							w.Stop()
+							os.Exit(1)
+						}
+						fmt.Println(string(data))
+
+						// Exit 1 if no processes found in system state
+						if systemState == nil || len(systemState.Processes.Processes) == 0 {
+							exitCode = 1
+						} else {
+							exitCode = 0
+						}
 					} else {
 						// Standard output: fleet state
-						output = agg.GetFleetState()
+						fleetState := agg.GetFleetState()
+						data, err := json.MarshalIndent(fleetState, "", "  ")
+						if err != nil {
+							fmt.Fprintf(os.Stderr, "Error marshaling JSON: %v\n", err)
+							agg.Stop()
+							w.Stop()
+							os.Exit(1)
+						}
+						fmt.Println(string(data))
+
+						// Exit 1 if no agents found
+						if fleetState == nil || len(fleetState.Agents) == 0 {
+							exitCode = 1
+						} else {
+							exitCode = 0
+						}
 					}
 
-					data, err := json.MarshalIndent(output, "", "  ")
-					if err != nil {
-						fmt.Fprintf(os.Stderr, "Error marshaling JSON: %v\n", err)
-						agg.Stop()
-						w.Stop()
-						os.Exit(1)
-					}
-					fmt.Println(string(data))
-
-					// Exit code 0 always for JSON output (data may be empty but valid)
 					agg.Stop()
 					w.Stop()
-					os.Exit(0)
+					os.Exit(exitCode)
 				} else {
 					// --once without --json: just wait for load then exit
 					state := agg.GetFleetState()

@@ -111,3 +111,24 @@ type Event struct {
 	Data    map[string]interface{} `json:"-"`
 	Raw     string                 `json:"raw,omitempty"` // For error reporting
 }
+
+// CurrentTask represents the current active task for a session.
+type CurrentTask struct {
+	ToolName    string    `json:"tool,omitempty"`         // e.g., "Read", "Bash", "WebFetch"
+	ArgsSummary string    `json:"args_summary,omitempty"` // Human-readable args, e.g., "README.md"
+	StartedAt   time.Time `json:"started_at"`             // When this task started
+	ElapsedSec  int64     `json:"elapsed_sec"`            // Seconds elapsed since task start
+	IsStalled   bool      `json:"is_stalled"`             // True if no activity for 30+ seconds while session running
+	LastEventAt time.Time `json:"last_event_at"`          // Timestamp of last log event
+}
+
+// TaskHistory represents a historical task entry with completion info.
+type TaskHistory struct {
+	ToolName    string    `json:"tool"`
+	ArgsSummary string    `json:"args_summary"`
+	StartedAt   time.Time `json:"started_at"`
+	EndedAt     time.Time `json:"ended_at"`
+	DurationSec int64     `json:"duration_sec"`
+	IsError     bool      `json:"is_error"`
+	Result      string    `json:"result,omitempty"` // Brief result summary
+}

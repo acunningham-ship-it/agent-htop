@@ -50,6 +50,15 @@ The goal is to provide a single query that gives agents the complete picture: CP
       "seconds": 86400,
       "updatedAt": "2026-04-20T19:59:50.000Z"
     },
+    "alerts": [
+      {
+        "rule": "oom_risk",
+        "severity": "critical",
+        "message": "Available RAM critically low: 150MB / 16384MB (99.1% free)",
+        "since": "2026-04-20T19:55:00.000Z",
+        "updatedAt": "2026-04-20T19:59:50.000Z"
+      }
+    ],
     "updatedAt": "2026-04-20T19:59:50.000Z"
   },
   "processes": {
@@ -93,6 +102,7 @@ The goal is to provide a single query that gives agents the complete picture: CP
 | `cpu` | CPUMetrics | ✓ | CPU usage and load statistics |
 | `memory` | MemoryMetrics | ✓ | Memory usage statistics |
 | `uptime` | UptimeInfo | ✓ | System uptime information |
+| `alerts` | Alert[] | ✗ | Active health alerts (omitted if empty) |
 | `updatedAt` | ISO8601 | ✓ | When this host state was last collected |
 
 ### CPUMetrics

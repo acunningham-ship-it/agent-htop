@@ -21,7 +21,7 @@ type HostState struct {
 	CPU       CPUMetrics      `json:"cpu"`
 	Memory    MemoryMetrics   `json:"memory"`
 	Uptime    UptimeInfo      `json:"uptime"`
-	Alerts    []interface{}   `json:"alerts,omitempty"` // []health.Alert - omitted if empty
+	Alerts    []*health.Alert `json:"alerts,omitempty"` // Health alerts (omitted if empty)
 	UpdatedAt time.Time       `json:"updatedAt"`
 }
 
@@ -29,6 +29,35 @@ type HostState struct {
 type UptimeInfo struct {
 	Seconds   uint64    `json:"seconds"`   // System uptime in seconds
 	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+// Implement health.SystemMetrics interface for SystemState
+func (s *SystemState) GetCPULoad1Min() float64 {
+	return s.Host.CPU.Load1Min
+}
+
+func (s *SystemState) GetCPULogicalCores() int {
+	return s.Host.CPU.LogicalCores
+}
+
+func (s *SystemState) GetMemAvailableMB() uint64 {
+	return s.Host.Memory.AvailableMB
+}
+
+func (s *SystemState) GetMemTotalMB() uint64 {
+	return s.Host.Memory.TotalMB
+}
+
+func (s *SystemState) GetMemUsedPercent() float64 {
+	return s.Host.Memory.UsedPercent
+}
+
+func (s *SystemState) GetMemSwapUsedPercent() float64 {
+	return s.Host.Memory.SwapUsedPercent
+}
+
+func (s *SystemState) GetMemSwapTotalMB() uint64 {
+	return s.Host.Memory.SwapTotalMB
 }
 
 // StateCollector aggregates all system collectors and provides cached snapshots.
@@ -113,15 +142,7 @@ func (sc *StateCollector) GetSnapshot() *SystemState {
 
 	// Evaluate alerts against the snapshot
 	sc.alertEvaluator.Evaluate(snapshot)
-	activeAlerts := sc.alertEvaluator.GetActiveAlerts()
-	if len(activeAlerts) > 0 {
-		// Convert alerts to interface slice for JSON marshaling
-		alertInterfaces := make([]interface{}, len(activeAlerts))
-		for i, alert := range activeAlerts {
-			alertInterfaces[i] = alert
-		}
-		snapshot.Host.Alerts = alertInterfaces
-	}
+	snapshot.Host.Alerts = sc.alertEvaluator.GetActiveAlerts()
 
 	// Cache the snapshot
 	sc.lastSnapshot = snapshot
@@ -155,9 +176,9 @@ func (sc *StateCollector) cloneSnapshot(state *SystemState) *SystemState {
 	}
 
 	// Clone alerts
-	var alertsCopy []interface{}
+	var alertsCopy []*health.Alert
 	if state.Host.Alerts != nil {
-		alertsCopy = make([]interface{}, len(state.Host.Alerts))
+		alertsCopy = make([]*health.Alert, len(state.Host.Alerts))
 		copy(alertsCopy, state.Host.Alerts)
 	}
 

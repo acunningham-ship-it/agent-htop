@@ -12,12 +12,13 @@ import (
 
 // Config represents the agent-htop configuration.
 type Config struct {
-	APIURL            string   `toml:"api_url"`
-	RefreshRateMs     int      `toml:"refresh_rate_ms"`
-	DiscordWebhook    string   `toml:"discord_webhook"`
-	Runtimes          []string `toml:"runtimes"`
-	Theme             Theme    `toml:"theme"`
-	Alerts            Alerts   `toml:"alerts"`
+	APIURL            string      `toml:"api_url"`
+	RefreshRateMs     int         `toml:"refresh_rate_ms"`
+	DiscordWebhook    string      `toml:"discord_webhook"`
+	Runtimes          []string    `toml:"runtimes"`
+	Theme             Theme       `toml:"theme"`
+	Alerts            Alerts      `toml:"alerts"`
+	Policies          []RawPolicy `toml:"policy"`
 }
 
 // Theme contains theme-related configuration.
@@ -30,6 +31,19 @@ type Theme struct {
 type Alerts struct {
 	SpendPerHourThreshold float64 `toml:"spend_per_hour_threshold"`
 	ErrorStreakCount      int     `toml:"error_streak_count"`
+}
+
+// RawPolicy is a raw policy definition from TOML config.
+// Maps directly to policy.Policy.
+type RawPolicy struct {
+	Name        string `toml:"name"`
+	Description string `toml:"description"`
+	When        string `toml:"when"`
+	Action      string `toml:"action"`
+	Reason      string `toml:"reason"`
+	Channel     string `toml:"channel"`
+	DryRunTTL   string `toml:"dry_run_ttl"`
+	Enabled     bool   `toml:"enabled"`
 }
 
 // DefaultConfig returns a new Config with sensible defaults.
