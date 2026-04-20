@@ -120,9 +120,9 @@ func (n *NetworkCollector) collect() error {
 
 	// Build interface metrics
 	var ifaceMetrics []InterfaceMetrics
-	timeDelta := n.lastCollectTime.Sub(now).Seconds()
-	if timeDelta == 0 {
-		timeDelta = 1 // Avoid division by zero
+	timeDelta := now.Sub(n.lastCollectTime).Seconds()
+	if timeDelta <= 0 {
+		timeDelta = 1 // Avoid division by zero on first collection
 	}
 
 	for _, iface := range interfaces {
