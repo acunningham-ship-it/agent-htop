@@ -1,0 +1,28 @@
+[Unit]
+Description=agent-htop Daemon - Monitor AI Agent Fleets
+Documentation=https://github.com/acunningham-ship-it/agent-htop
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/agent-htop daemon
+# Restart on failure, but wait 10 seconds between restarts
+Restart=on-failure
+RestartSec=10
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=%h/.config/agent-htop %h/.paperclip %h/.claude %h/.codex
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=agent-htop
+
+[Install]
+# Start on boot
+WantedBy=default.target

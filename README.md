@@ -114,10 +114,95 @@ agent-htop --alert-level warn
 
 Rate-limited to max 1 alert per agent per 10 minutes.
 
+## JSON snapshot mode
+
+Query current fleet state as JSON for programmatic use:
+
+```bash
+agent-htop --once --json
+```
+
+Useful for:
+- Supervisor agents querying fleet state
+- Cron health checks
+- MCP wrappers integrating agent-htop into other systems
+- Shell scripts branching on agent status
+
+**Example:**
+
+```bash
+# Get JSON snapshot of all agents
+agent-htop --once --json > fleet.json
+
+# Count total agents
+agent-htop --once --json | jq '.Agents | length'
+
+# Find running agents
+agent-htop --once --json | jq '.Agents[] | select(.Status == "running")'
+
+# Check for errors
+agent-htop --once --json | jq '.Agents[] | select(.IsError == true)'
+
+# Monitor only Claude Code sessions
+agent-htop --once --json --runtime claude | jq '.Agents[].AgentName'
+
+# Include Paperclip agents
+agent-htop --once --json --company <company-id>
+```
+
+**Exit codes:**
+- `0` — Success (one or more agents found)
+- `1` — No agents found in specified scope
+
+**JSON Schema:**
+
+The output is a `FleetSnapshot` object:
+
+```typescript
+interface FleetSnapshot {
+  Agents: AgentView[]
+  UpdatedAt: string  // RFC3339 timestamp
+}
+
+interface AgentView {
+  AgentID: string           // UUID or session ID
+  AgentName: string         // Display name
+  Status: "running" | "idle" | "error"  // Current status
+  Model: string             // LLM model (e.g. "claude-sonnet-4-6")
+  ElapsedMS: number         // Milliseconds since start of current run
+  TotalCostUSD: number      // Cumulative cost today
+  InputTokens: number       // Total input tokens
+  OutputTokens: number      // Total output tokens
+  LastTool: string          // Name of last tool_use executed
+  IsError: boolean          // Whether current run has error
+  Runtime: "paperclip" | "claude" | "codex"  // Runtime type
+  Anomalies: AnomalyEvent[] | null  // Active anomalies (if any)
+  Projection: CostProjection  // Cost projection data
+}
+
+interface AnomalyEvent {
+  Type: string      // e.g. "high_spend", "error_streak", "cost_anomaly"
+  Severity: string  // "info", "warning", "critical"
+  Message: string
+  Timestamp: string // RFC3339
+}
+
+interface CostProjection {
+  SpentToday: number      // USD spent so far today
+  ProjectedToday: number  // Projected spend if trend continues
+  DailyAverage: number    // 7-day rolling average daily cost
+  SpendRate: number       // Current USD per hour
+  Color: "green" | "yellow" | "red"  // Alert color
+  HoursRemaining: number  // Estimated hours until daily budget
+}
+```
+
 ## Flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--once` | `false` | Run once and exit instead of launching interactive TUI |
+| `--json` | `false` | Output JSON snapshot instead of TUI (requires `--once`) |
 | `--company` | *optional* | Paperclip company ID (enables Paperclip agents + kill/pause) |
 | `--runtime` | `auto` | `auto`, `claude`, `codex`, `paperclip`, or `all` |
 | `--api-url` | `http://localhost:3101` | Paperclip API URL |

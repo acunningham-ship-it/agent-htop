@@ -55,6 +55,13 @@ func NewWatcher(watchDir string) (*Watcher, error) {
 
 // Start begins watching for log file changes.
 func (w *Watcher) Start(ctx context.Context) error {
+	// If no watch directory specified (e.g., Claude Code-only mode), just run an idle watcher
+	if w.watchDir == "" {
+		w.wg.Add(1)
+		go w.run(ctx)
+		return nil
+	}
+
 	// Add watch for the root directory
 	if err := w.fsWatcher.Add(w.watchDir); err != nil {
 		return fmt.Errorf("failed to add watch: %w", err)

@@ -12,13 +12,21 @@ import (
 
 	"github.com/acunningham-ship-it/agent-htop/internal/anomaly"
 	"github.com/acunningham-ship-it/agent-htop/internal/parser"
+	"github.com/acunningham-ship-it/agent-htop/internal/sysinfo"
 	"github.com/acunningham-ship-it/agent-htop/internal/watcher"
 )
 
 // FleetState represents the current state of all agents in a company.
 type FleetState struct {
-	Agents    []*AgentView
-	UpdatedAt time.Time
+	Agents      []*AgentView
+	HostMetrics *HostMetrics
+	UpdatedAt   time.Time
+}
+
+// HostMetrics contains aggregated host system metrics.
+type HostMetrics struct {
+	CPU    *sysinfo.CPUMetrics
+	Memory *sysinfo.MemoryMetrics
 }
 
 // AgentView represents a single agent's current state for dashboard display.
@@ -47,6 +55,9 @@ type Aggregator struct {
 	detector    *anomaly.Detector
 	runtimes    map[parser.Runtime]bool // Which runtimes to include
 
+	cpuCollector    *sysinfo.CPUCollector
+	memoryCollector *sysinfo.MemoryCollector
+
 	mu              sync.RWMutex
 	fleetState      *FleetState
 	costTrackers    map[string]*AgentCostTracker // Per-agent cost tracking
@@ -71,23 +82,33 @@ func NewAggregatorWithRuntimes(companyID, logDir string, agentNamer AgentNamer, 
 	}
 
 	return &Aggregator{
-		companyID:     companyID,
-		logDir:        logDir,
-		agentNamer:    agentNamer,
-		watcher:       w,
-		detector:      anomaly.NewDetector(),
-		runtimes:      runtimeMap,
-		fleetState:    &FleetState{Agents: make([]*AgentView, 0)},
-		costTrackers:  make(map[string]*AgentCostTracker),
-		dailyAverages: make(map[string][]float64),
-		runHistory:    make([]*parser.AgentRun, 0),
-		stateCh:       make(chan *FleetState, 10),
-		stopCh:        make(chan struct{}),
+		companyID:       companyID,
+		logDir:          logDir,
+		agentNamer:      agentNamer,
+		watcher:         w,
+		detector:        anomaly.NewDetector(),
+		runtimes:        runtimeMap,
+		cpuCollector:    sysinfo.NewCPUCollector(time.Second),
+		memoryCollector: sysinfo.NewMemoryCollector(time.Second),
+		fleetState:      &FleetState{Agents: make([]*AgentView, 0), HostMetrics: &HostMetrics{}},
+		costTrackers:    make(map[string]*AgentCostTracker),
+		dailyAverages:   make(map[string][]float64),
+		runHistory:      make([]*parser.AgentRun, 0),
+		stateCh:         make(chan *FleetState, 10),
+		stopCh:          make(chan struct{}),
 	}
 }
 
 // Start begins aggregating fleet state.
 func (a *Aggregator) Start(ctx context.Context) error {
+	// Start system metrics collectors
+	if err := a.cpuCollector.Start(); err != nil {
+		fmt.Printf("[aggregator] Warning: failed to start CPU collector: %v\n", err)
+	}
+	if err := a.memoryCollector.Start(); err != nil {
+		fmt.Printf("[aggregator] Warning: failed to start memory collector: %v\n", err)
+	}
+
 	// Start background goroutines FIRST so they can drain the anomaly event channel during log loading
 	a.wg.Add(2)
 	go a.run(ctx)
@@ -373,6 +394,13 @@ func (a *Aggregator) updateFleetState(ctx context.Context, run *parser.AgentRun)
 	a.sortAgents()
 	a.fleetState.UpdatedAt = time.Now()
 
+	// Update host metrics
+	if a.fleetState.HostMetrics == nil {
+		a.fleetState.HostMetrics = &HostMetrics{}
+	}
+	a.fleetState.HostMetrics.CPU = a.cpuCollector.Get()
+	a.fleetState.HostMetrics.Memory = a.memoryCollector.Get()
+
 	// Broadcast updated state (non-blocking - skip if nobody is listening)
 	select {
 	case a.stateCh <- a.fleetState:
@@ -436,16 +464,34 @@ func (a *Aggregator) GetFleetState() *FleetState {
 	defer a.mu.RUnlock()
 
 	// Return a copy to avoid external mutation
-	copy := &FleetState{
-		Agents:    make([]*AgentView, len(a.fleetState.Agents)),
-		UpdatedAt: a.fleetState.UpdatedAt,
+	stateCopy := &FleetState{
+		Agents:      make([]*AgentView, len(a.fleetState.Agents)),
+		UpdatedAt:   a.fleetState.UpdatedAt,
+		HostMetrics: &HostMetrics{},
 	}
 	for i, agent := range a.fleetState.Agents {
 		agentCopy := *agent
-		copy.Agents[i] = &agentCopy
+		stateCopy.Agents[i] = &agentCopy
 	}
 
-	return copy
+	// Copy host metrics if available
+	if a.fleetState.HostMetrics != nil {
+		if a.fleetState.HostMetrics.CPU != nil {
+			cpuCopy := *a.fleetState.HostMetrics.CPU
+			if cpuCopy.PercentPerCore != nil {
+				percentCopy := make([]float64, len(cpuCopy.PercentPerCore))
+				copy(percentCopy, cpuCopy.PercentPerCore)
+				cpuCopy.PercentPerCore = percentCopy
+			}
+			stateCopy.HostMetrics.CPU = &cpuCopy
+		}
+		if a.fleetState.HostMetrics.Memory != nil {
+			memoryCopy := *a.fleetState.HostMetrics.Memory
+			stateCopy.HostMetrics.Memory = &memoryCopy
+		}
+	}
+
+	return stateCopy
 }
 
 // StateUpdates returns a channel that receives fleet state updates.
@@ -545,6 +591,8 @@ func (a *Aggregator) handleAnomalies(ctx context.Context) {
 func (a *Aggregator) Stop() {
 	close(a.stopCh)
 	a.detector.Stop()
+	a.cpuCollector.Stop()
+	a.memoryCollector.Stop()
 	a.wg.Wait()
 }
 
@@ -630,4 +678,14 @@ func (a *Aggregator) GetHistoricalView() *HistoricalView {
 	view.PadToSevenDays(now)
 	view.GeneratedAt = time.Now()
 	return view
+}
+
+// GetToolHeatmap returns a tool usage heatmap for all runs (or filtered by agent).
+func (a *Aggregator) GetToolHeatmap(filterAgentID string) *parser.ToolHeatmap {
+	a.mu.RLock()
+	runHistory := make([]*parser.AgentRun, len(a.runHistory))
+	copy(runHistory, a.runHistory)
+	a.mu.RUnlock()
+
+	return ComputeToolHeatmap(runHistory, filterAgentID)
 }

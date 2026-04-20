@@ -2,7 +2,10 @@ package ui
 
 import (
 	"context"
+	"encoding/csv"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -12,6 +15,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/acunningham-ship-it/agent-htop/internal/aggregator"
 	"github.com/acunningham-ship-it/agent-htop/internal/api"
+	"github.com/acunningham-ship-it/agent-htop/internal/parser"
 )
 
 // ViewMode represents the current view state
@@ -20,6 +24,7 @@ type ViewMode string
 const (
 	ViewModeLive       ViewMode = "live"
 	ViewModeHistorical ViewMode = "historical"
+	ViewModeTools      ViewMode = "tools"
 )
 
 // FilterMode represents the current filter state
@@ -79,6 +84,10 @@ type Model struct {
 	// Detail drawer
 	showDetail    bool
 	detailAgentID string
+
+	// Tool heatmap
+	toolHeatmap       *parser.ToolHeatmap
+	toolFilterAgentID string // Empty for fleet-wide, or agent ID for filtering
 
 	// Runtime detection results
 	runtimeStatus map[string]bool // runtime name -> detected (true/false)
@@ -422,8 +431,23 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if m.historical == nil {
 				m.historical = m.aggregator.GetHistoricalView()
 			}
-		} else {
+		} else if m.viewMode == ViewModeHistorical {
 			m.viewMode = ViewModeLive
+		}
+		return m, nil
+	case "T":
+		// Shift+T to toggle tool heatmap view
+		if m.viewMode == ViewModeLive {
+			m.viewMode = ViewModeTools
+			m.loadToolHeatmap()
+		} else if m.viewMode == ViewModeTools {
+			m.viewMode = ViewModeLive
+		}
+		return m, nil
+	case "e":
+		// Export tool heatmap to CSV if in tools view
+		if m.viewMode == ViewModeTools && m.toolHeatmap != nil {
+			m.exportToolHeatmapCSV()
 		}
 		return m, nil
 	case "/":
@@ -568,7 +592,9 @@ func (m *Model) View() string {
 	header := m.renderHeader()
 
 	var tableView string
-	if m.viewMode == ViewModeHistorical {
+	if m.viewMode == ViewModeTools {
+		tableView = m.renderToolHeatmap()
+	} else if m.viewMode == ViewModeHistorical {
 		tableView = m.renderHistoricalView()
 	} else if m.searchMode {
 		tableView = m.renderSearchMode()
@@ -815,7 +841,7 @@ func (m *Model) renderHeader() string {
 	// Main header line: agent-htop v0.2.0 | <runtime badges> | N sessions | updated Xs ago
 	// Note: [K]ill, [P]ause, [R]esume are only available for Paperclip agents
 	header := fmt.Sprintf(
-		"agent-htop v0.2.0 | %s | %d sessions | updated %s ago   %s  %s%s  [q]uit [K]ill [P]ause [R]esume [H]istory [/]search\n",
+		"agent-htop v0.2.0 | %s | %d sessions | updated %s ago   %s  %s%s  [q]uit [K]ill [P]ause [R]esume [H]istory [T]ools [/]search\n",
 		runtimeStr,
 		len(m.fleet.Agents),
 		formatSinceUpdate(m.fleet.UpdatedAt),
@@ -841,7 +867,10 @@ func (m *Model) renderHeader() string {
 	// Cost projection line (shown when any agent has projection data)
 	projectionLine := m.renderProjectionLine()
 
-	return mainHeader + companyLine + projectionLine
+	// System metrics line (CPU, RAM, load)
+	systemLine := m.renderSystemMetrics()
+
+	return mainHeader + companyLine + systemLine + projectionLine
 }
 
 // renderProjectionLine builds the fleet-wide cost projection footer line.
@@ -894,6 +923,27 @@ func (m *Model) renderProjectionLine() string {
 	return lipgloss.NewStyle().Foreground(colorCode).Render(line)
 }
 
+// renderSystemMetrics builds a line showing host CPU, RAM, and load metrics.
+// Format: "  CPU 34.2% | RAM 6.2/16.0 GB | Load 1.2 2.3 3.1"
+func (m *Model) renderSystemMetrics() string {
+	if m.fleet == nil || m.fleet.HostMetrics == nil {
+		return ""
+	}
+
+	cpu := m.fleet.HostMetrics.CPU
+	mem := m.fleet.HostMetrics.Memory
+	if cpu == nil || mem == nil {
+		return ""
+	}
+
+	cpuStr := fmt.Sprintf("CPU %.1f%%", cpu.AveragePercent)
+	ramStr := fmt.Sprintf("RAM %.1f/%.0f GB", float64(mem.UsedMB)/1024.0, float64(mem.TotalMB)/1024.0)
+	loadStr := fmt.Sprintf("Load %.1f %.1f %.1f", cpu.Load1Min, cpu.Load5Min, cpu.Load15Min)
+
+	line := fmt.Sprintf("  %s | %s | %s\n", cpuStr, ramStr, loadStr)
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(line)
+}
+
 // renderHelpOverlay renders the help screen with keybindings and runtime detection status.
 func (m *Model) renderHelpOverlay() string {
 	// Build runtime detection status line
@@ -914,6 +964,8 @@ func (m *Model) renderHelpOverlay() string {
 		"  [P]           Pause selected agent (Paperclip only)",
 		"  [R]           Resume selected agent (Paperclip only)",
 		"  [H]           Toggle historical 7-day view",
+		"  [T]           Toggle tool usage heatmap",
+		"  [e]           Export tool heatmap to CSV",
 		"",
 		"  RUNTIME DETECTION",
 		"  =================",
@@ -1117,6 +1169,136 @@ func (m *Model) renderDetailDrawer() string {
 		drawer,
 		footer,
 	)
+}
+
+// renderToolHeatmap renders the tool usage heatmap view.
+func (m *Model) renderToolHeatmap() string {
+	if m.toolHeatmap == nil {
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("Loading tool heatmap...\n")
+	}
+
+	// Refresh heatmap on every render (keep it current)
+	m.loadToolHeatmap()
+
+	// Build header
+	header := "Tool Usage Heatmap\n"
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
+	styledHeader := headerStyle.Render(header)
+
+	// Build table
+	columns := []table.Column{
+		{Title: "TOOL", Width: 20},
+		{Title: "CALLS", Width: 8},
+		{Title: "ERRORS", Width: 8},
+		{Title: "P50MS", Width: 8},
+		{Title: "P95MS", Width: 8},
+		{Title: "MAXMS", Width: 8},
+		{Title: "SUCCESS%", Width: 10},
+		{Title: "EST.COST", Width: 12},
+	}
+
+	var rows []table.Row
+	for _, tool := range m.toolHeatmap.Tools {
+		successPct := tool.SuccessRate * 100
+		row := table.Row{
+			truncate(tool.Name, 20),
+			fmt.Sprintf("%d", tool.CallCount),
+			fmt.Sprintf("%d", tool.ErrorCount),
+			fmt.Sprintf("%.1f", tool.P50DurationMS),
+			fmt.Sprintf("%.1f", tool.P95DurationMS),
+			fmt.Sprintf("%.1f", tool.MaxDurationMS),
+			fmt.Sprintf("%.1f%%", successPct),
+			fmt.Sprintf("$%.4f", tool.TotalCostEst),
+		}
+		rows = append(rows, row)
+	}
+
+	heatmapTable := table.New(
+		table.WithColumns(columns),
+		table.WithRows(rows),
+		table.WithFocused(false),
+		table.WithHeight(15),
+	)
+
+	s := table.DefaultStyles()
+	s.Header = s.Header.
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderBottom(true).
+		Bold(false)
+	heatmapTable.SetStyles(s)
+
+	// Summary stats
+	totalCostEst := 0.0
+	for _, tool := range m.toolHeatmap.Tools {
+		totalCostEst += tool.TotalCostEst
+	}
+
+	summaryLine := fmt.Sprintf("\n  Total Calls: %d  Total Errors: %d  Total Cost Est: $%.4f",
+		m.toolHeatmap.TotalCalls, m.toolHeatmap.TotalErrors, totalCostEst)
+	summaryStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
+	styledSummary := summaryStyle.Render(summaryLine)
+
+	// Help text
+	helpText := "\n  [T]back to live view  [e]export CSV"
+	styledHelp := lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(helpText)
+
+	return lipgloss.JoinVertical(
+		lipgloss.Left,
+		styledHeader,
+		heatmapTable.View(),
+		styledSummary,
+		styledHelp,
+	)
+}
+
+// loadToolHeatmap loads tool heatmap data from the aggregator.
+func (m *Model) loadToolHeatmap() {
+	m.toolHeatmap = m.aggregator.GetToolHeatmap(m.toolFilterAgentID)
+}
+
+// exportToolHeatmapCSV exports the current tool heatmap to a CSV file.
+func (m *Model) exportToolHeatmapCSV() {
+	if m.toolHeatmap == nil || len(m.toolHeatmap.Tools) == 0 {
+		return
+	}
+
+	// Create filename with timestamp
+	timestamp := time.Now().Format("2006-01-02_150405")
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	filename := filepath.Join(homeDir, fmt.Sprintf("tool-heatmap-%s.csv", timestamp))
+
+	// Create file
+	file, err := os.Create(filename)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+
+	// Write CSV
+	writer := csv.NewWriter(file)
+	defer writer.Flush()
+
+	// Write header
+	header := []string{"Tool", "CallCount", "ErrorCount", "SuccessRate", "P50DurationMS", "P95DurationMS", "MaxDurationMS", "TotalCostEst"}
+	writer.Write(header)
+
+	// Write rows
+	for _, tool := range m.toolHeatmap.Tools {
+		row := []string{
+			tool.Name,
+			fmt.Sprintf("%d", tool.CallCount),
+			fmt.Sprintf("%d", tool.ErrorCount),
+			fmt.Sprintf("%.4f", tool.SuccessRate),
+			fmt.Sprintf("%.2f", tool.P50DurationMS),
+			fmt.Sprintf("%.2f", tool.P95DurationMS),
+			fmt.Sprintf("%.2f", tool.MaxDurationMS),
+			fmt.Sprintf("%.4f", tool.TotalCostEst),
+		}
+		writer.Write(row)
+	}
 }
 
 // StateUpdateMsg is a message containing a state update from the aggregator.
