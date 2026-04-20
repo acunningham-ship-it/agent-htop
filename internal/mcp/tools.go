@@ -987,14 +987,14 @@ func (s *Server) handleKillProcess(params json.RawMessage) (interface{}, *JSONRP
 
 	// Log the action
 	if s.actionLog != nil {
-		entry := &action.ActionLogEntry{
-			Timestamp: time.Now(),
-			AgentID:   s.getCallerAgentID(params),
-			Action:    fmt.Sprintf("kill_process(pid=%d, signal=%s)", req.PID, signal),
-			Details:   fmt.Sprintf("Killed process %d with signal %s", req.PID, signal),
-			Status:    "success",
+		entry := &action.Action{
+			Timestamp:       time.Now(),
+			CallerAgentID:   s.getCallerAgentID(params),
+			ActionType:      "kill_process",
+			TargetSessionID: fmt.Sprintf("pid=%d", req.PID),
+			Reason:          fmt.Sprintf("Signal %s sent to process %d", signal, req.PID),
 		}
-		s.actionLog.Log(entry)
+		s.actionLog.Record(entry)
 	}
 
 	return map[string]interface{}{
@@ -1002,5 +1002,109 @@ func (s *Server) handleKillProcess(params json.RawMessage) (interface{}, *JSONRP
 		"signal":  signal,
 		"success": true,
 		"message": fmt.Sprintf("Signal %s sent to process %d", signal, req.PID),
+	}, nil
+}
+
+// handleGetNetworkState returns the current network state and connectivity information.
+func (s *Server) handleGetNetworkState(params json.RawMessage) (interface{}, *JSONRPCErr) {
+	state := s.agg.GetSystemState()
+	if state == nil {
+		return nil, &JSONRPCErr{
+			Code:    -32603,
+			Message: "Internal error",
+			Data:    "system state unavailable",
+		}
+	}
+
+	netMetrics := state.Host.Network
+
+	type InterfaceInfo struct {
+		Name         string  `json:"name"`
+		IP           string  `json:"ip"`
+		State        string  `json:"state"`
+		BytesSent    uint64  `json:"bytes_sent"`
+		BytesRecv    uint64  `json:"bytes_recv"`
+		ThroughputUp float64 `json:"throughput_up_bps"`
+		ThroughputDn float64 `json:"throughput_down_bps"`
+	}
+
+	type WiFiInfo struct {
+		Connected bool   `json:"connected"`
+		SSID      string `json:"ssid"`
+		SignalDBm int    `json:"signal_dBm"`
+	}
+
+	interfaces := make([]*InterfaceInfo, len(netMetrics.Interfaces))
+	for i, iface := range netMetrics.Interfaces {
+		interfaces[i] = &InterfaceInfo{
+			Name:         iface.Name,
+			IP:           iface.IP,
+			State:        iface.State,
+			BytesSent:    iface.BytesSent,
+			BytesRecv:    iface.BytesRecv,
+			ThroughputUp: iface.ThroughputUp,
+			ThroughputDn: iface.ThroughputDn,
+		}
+	}
+
+	var wifi *WiFiInfo
+	if netMetrics.WiFi != nil {
+		wifi = &WiFiInfo{
+			Connected: netMetrics.WiFi.Connected,
+			SSID:      netMetrics.WiFi.SSID,
+			SignalDBm: netMetrics.WiFi.SignalDBm,
+		}
+	}
+
+	return map[string]interface{}{
+		"internet_up": netMetrics.InternetUp,
+		"interfaces":  interfaces,
+		"wifi":        wifi,
+		"timestamp":   netMetrics.UpdatedAt,
+	}, nil
+}
+
+// handleTestConnectivity tests connectivity to one or more hosts using ping.
+func (s *Server) handleTestConnectivity(params json.RawMessage) (interface{}, *JSONRPCErr) {
+	var req struct {
+		InternalHost *string `json:"internal_host,omitempty"`
+	}
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &req); err != nil {
+			return nil, &JSONRPCErr{
+				Code:    -32602,
+				Message: "Invalid params",
+				Data:    err.Error(),
+			}
+		}
+	}
+
+	internalHost := ""
+	if req.InternalHost != nil {
+		internalHost = *req.InternalHost
+	}
+
+	// Run connectivity tests
+	results := sysinfo.TestConnectivity(internalHost)
+
+	// Log the action
+	if s.actionLog != nil {
+		hosts := "8.8.8.8"
+		if internalHost != "" {
+			hosts += ", " + internalHost
+		}
+		entry := &action.Action{
+			Timestamp:     time.Now(),
+			CallerAgentID: s.getCallerAgentID(params),
+			ActionType:    "test_connectivity",
+			TargetSessionID: hosts,
+			Reason:        fmt.Sprintf("Tested connectivity to %s", hosts),
+		}
+		s.actionLog.Record(entry)
+	}
+
+	return map[string]interface{}{
+		"results":   results,
+		"timestamp": time.Now(),
 	}, nil
 }

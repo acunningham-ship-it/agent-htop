@@ -149,6 +149,8 @@ func (s *Server) handleRequest(ctx context.Context, req *JSONRPCRequest) *JSONRP
 		"list_tasks":            s.handleListTasks,
 		"list_processes":        s.handleListProcesses,
 		"kill_process":          s.handleKillProcess,
+		"get_network_state":     s.handleGetNetworkState,
+		"test_connectivity":     s.handleTestConnectivity,
 	}
 
 	handler, ok := handlers[req.Method]

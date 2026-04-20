@@ -3,7 +3,9 @@ package sysinfo
 import (
 	"fmt"
 	"net"
+	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -367,4 +369,103 @@ func parseAirport(output string) *WiFiMetrics {
 		}
 	}
 	return nil
+}
+
+// PingResult contains the result of a ping test.
+type PingResult struct {
+	Host      string  `json:"host"`
+	Reachable bool    `json:"reachable"`
+	LatencyMS float64 `json:"latency_ms"`
+	Error     string  `json:"error,omitempty"`
+}
+
+// TestConnectivity pings one or more hosts and returns connectivity results.
+// If internalHost is empty, only pings the external host (8.8.8.8).
+func TestConnectivity(internalHost string) []*PingResult {
+	hosts := []string{"8.8.8.8"}
+	if internalHost != "" {
+		hosts = append(hosts, internalHost)
+	}
+
+	var results []*PingResult
+	for _, host := range hosts {
+		result := pingHost(host)
+		results = append(results, result)
+	}
+	return results
+}
+
+// pingHost pings a single host and returns the result.
+func pingHost(host string) *PingResult {
+	result := &PingResult{Host: host}
+
+	// Try Linux ping first (most common)
+	cmd := exec.Command("ping", "-c", "1", "-W", "2", host)
+	start := time.Now()
+	output, err := cmd.Output()
+	elapsed := time.Since(start).Seconds() * 1000 // Convert to milliseconds
+
+	if err == nil {
+		result.Reachable = true
+		result.LatencyMS = elapsed
+
+		// Try to extract actual latency from output
+		latency := extractPingLatency(string(output))
+		if latency > 0 {
+			result.LatencyMS = latency
+		}
+		return result
+	}
+
+	// Try macOS ping format (no -W flag, use -W with lower value)
+	if os.Getenv("GOOS") == "darwin" || isMacOS() {
+		cmd = exec.Command("ping", "-c", "1", "-W", "2000", host)
+		start = time.Now()
+		output, err = cmd.Output()
+		elapsed = time.Since(start).Seconds() * 1000
+
+		if err == nil {
+			result.Reachable = true
+			latency := extractPingLatency(string(output))
+			if latency > 0 {
+				result.LatencyMS = latency
+			} else {
+				result.LatencyMS = elapsed
+			}
+			return result
+		}
+	}
+
+	result.Reachable = false
+	result.Error = err.Error()
+	return result
+}
+
+// extractPingLatency extracts the latency from ping output (handles both Linux and macOS formats).
+// Returns 0 if latency cannot be extracted.
+func extractPingLatency(output string) float64 {
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		// Look for lines with "time=" (Linux format) or "time " (macOS format)
+		if strings.Contains(line, "time=") {
+			parts := strings.Fields(line)
+			for i, part := range parts {
+				if part == "time=" && i+1 < len(parts) {
+					// Extract value and unit (e.g., "50.2ms" or "50.2 ms")
+					val := parts[i+1]
+					val = strings.TrimSuffix(val, "ms")
+					if f, err := strconv.ParseFloat(val, 64); err == nil {
+						return f
+					}
+				}
+			}
+		}
+	}
+	return 0
+}
+
+// isMacOS checks if the system is macOS.
+func isMacOS() bool {
+	_, err := os.Stat("/System/Library/PrivateFrameworks")
+	return err == nil
 }

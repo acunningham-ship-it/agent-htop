@@ -20,7 +20,7 @@ import (
 	"github.com/acunningham-ship-it/agent-htop/internal/aggregator"
 	"github.com/acunningham-ship-it/agent-htop/internal/api"
 	"github.com/acunningham-ship-it/agent-htop/internal/config"
-	// "github.com/acunningham-ship-it/agent-htop/internal/mcp" // TODO: Re-enable when aggregator interfaces are updated
+	"github.com/acunningham-ship-it/agent-htop/internal/mcp"
 	"github.com/acunningham-ship-it/agent-htop/internal/notify"
 	"github.com/acunningham-ship-it/agent-htop/internal/parser"
 	"github.com/acunningham-ship-it/agent-htop/internal/queue"
@@ -509,11 +509,107 @@ func runDaemon(companyID, configPath, apiURL string, refreshMs int, runtimesStr,
 	log.Printf("Daemon stopped")
 }
 
-// TODO: Re-enable cmdMCP when aggregator and anomaly detector interfaces are updated
-// // cmdMCP starts the MCP JSON-RPC 2.0 server for fleet control via supervisor agents.
-// func cmdMCP(companyID, configPath, apiURL string, verbose bool) {
-// 	// ... implementation disabled for now
-// }
+// cmdMCP starts the MCP JSON-RPC 2.0 server for fleet control via supervisor agents.
+func cmdMCP(companyID, configPath, apiURL string, verbose bool) {
+	if companyID == "" {
+		fmt.Fprintf(os.Stderr, "Error: --company is required for MCP mode\n")
+		os.Exit(1)
+	}
+
+	// Load or create config
+	cfg, _, err := config.LoadOrCreate(configPath)
+	if err != nil {
+		log.Fatalf("Error loading config: %v", err)
+	}
+
+	// Apply command-line flag overrides
+	if apiURL != "" {
+		cfg.APIURL = apiURL
+	}
+
+	// Setup paths
+	home, err := os.UserHomeDir()
+	if err != nil {
+		log.Fatalf("Failed to get home directory: %v", err)
+	}
+
+	logDir := filepath.Join(home, ".paperclip", "instances", "default", "data", "run-logs")
+	if _, err := os.Stat(logDir); os.IsNotExist(err) {
+		log.Fatalf("Log directory does not exist: %s", logDir)
+	}
+
+	// Initialize queue database and manager
+	configDir := filepath.Join(home, ".config", "agent-htop")
+	queueDB, err := queue.NewDB(configDir)
+	if err != nil {
+		log.Fatalf("Failed to initialize queue database: %v", err)
+	}
+	defer queueDB.Close()
+
+	// Convert config queues to queue definitions
+	var queueDefs []queue.QueueDef
+	for _, cfgQueue := range cfg.Queues {
+		queueDefs = append(queueDefs, queue.QueueDef{
+			Name:          cfgQueue.Name,
+			MaxRetries:    cfgQueue.MaxRetries,
+			RetentionDays: cfgQueue.RetentionDays,
+		})
+	}
+
+	// Create queue manager
+	queueManager, err := queue.NewManager(queueDB, queueDefs)
+	if err != nil {
+		log.Fatalf("Failed to create queue manager: %v", err)
+	}
+
+	// Create API client
+	apiClient := api.NewClient(cfg.APIURL)
+	ctx := context.Background()
+	if err := apiClient.Health(ctx); err != nil {
+		log.Fatalf("Paperclip API not reachable: %v", err)
+	}
+
+	// Create watcher
+	w, err := watcher.NewWatcher(logDir)
+	if err != nil {
+		log.Fatalf("Failed to create watcher: %v", err)
+	}
+
+	// Create aggregator
+	agg := aggregator.NewAggregatorWithRuntimes(companyID, logDir, apiClient, w, []parser.Runtime{parser.RuntimePaperclip})
+
+	// Start watcher
+	if err := w.Start(ctx); err != nil {
+		log.Fatalf("Failed to start watcher: %v", err)
+	}
+
+	// Start aggregator
+	if err := agg.Start(ctx); err != nil {
+		log.Fatalf("Failed to start aggregator: %v", err)
+	}
+
+	log.Printf("MCP server started for company %s", companyID)
+
+	// Create and start MCP server
+	mcpServer := mcp.NewServer(agg, apiClient, companyID, "", queueManager)
+
+	// Setup signal handling
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	// Run MCP server in goroutine
+	go mcpServer.Start(ctx)
+
+	// Wait for signal
+	<-sigChan
+	log.Printf("Received shutdown signal")
+
+	// Cleanup
+	agg.Stop()
+	if err := w.Stop(); err != nil {
+		log.Printf("Error stopping watcher: %v", err)
+	}
+}
 
 
 
@@ -628,11 +724,10 @@ Examples:
 	}
 
 	// Handle MCP subcommand
-	// TODO: Re-enable MCP when aggregator/anomaly interfaces are updated
-	// if subcommand == "mcp" {
-	// 	cmdMCP(*companyID, *configPath, *apiURL, *verbose)
-	// 	return
-	// }
+	if subcommand == "mcp" {
+		cmdMCP(*companyID, *configPath, *apiURL, *verbose)
+		return
+	}
 
 	// Load or create config
 	cfg, cfgPath, err := config.LoadOrCreate(*configPath)
