@@ -161,10 +161,6 @@ make build
 
 ## Troubleshooting
 
-**"failed to parse log: scanner error: bufio.Scanner: token too long"**
-
-This warning occurs when a single Paperclip log line exceeds 64KB (e.g., very large tool responses). The agent is still tracked, but some details may be missing. This is a known limitation being fixed in [HTO-40](https://github.com/acunningham-ship-it/agent-htop/issues/40).
-
 **Paperclip API not reachable**
 
 If you see "Warning: Paperclip API not reachable", check:
