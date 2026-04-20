@@ -13,6 +13,7 @@ import (
 	"github.com/acunningham-ship-it/agent-htop/internal/anomaly"
 	"github.com/acunningham-ship-it/agent-htop/internal/health"
 	"github.com/acunningham-ship-it/agent-htop/internal/parser"
+	"github.com/acunningham-ship-it/agent-htop/internal/policy"
 	"github.com/acunningham-ship-it/agent-htop/internal/sysinfo"
 	"github.com/acunningham-ship-it/agent-htop/internal/watcher"
 )
@@ -29,6 +30,12 @@ type FleetState struct {
 type HostMetrics struct {
 	CPU    *sysinfo.CPUMetrics
 	Memory *sysinfo.MemoryMetrics
+}
+
+// PolicyEvaluator evaluates policies against session context.
+type PolicyEvaluator interface {
+	Evaluate(ctx *policy.SessionContext) []*policy.PolicyEvent
+	Events() <-chan *policy.PolicyEvent
 }
 
 // AgentView represents a single agent's current state for dashboard display.
@@ -63,6 +70,7 @@ type Aggregator struct {
 	memoryCollector  *sysinfo.MemoryCollector
 	processCollector *sysinfo.ProcessCollector
 	alertEvaluator   *health.AlertEvaluator
+	policyEngine     PolicyEvaluator // Policy evaluator for guardrail actions
 
 	mu              sync.RWMutex
 	fleetState      *FleetState
@@ -574,6 +582,52 @@ func (a *Aggregator) GetRecentRunsForAgent(agentID string, limit int) []*parser.
 			result = append(result, a.runHistory[i])
 		}
 	}
+
+	return result
+}
+
+// GetSessionByID returns a session (AgentRun) by RunID or SessionID.
+func (a *Aggregator) GetSessionByID(id string) *parser.AgentRun {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	for _, run := range a.runHistory {
+		if run.RunID == id || run.SessionID == id {
+			// Return a copy to avoid external mutation
+			runCopy := *run
+			return &runCopy
+		}
+	}
+	return nil
+}
+
+// ListSessions returns all sessions, optionally filtered by runtime and status.
+func (a *Aggregator) ListSessions(runtimeFilter *parser.Runtime, statusFilter *string) []*parser.AgentRun {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	var result []*parser.AgentRun
+
+	for _, run := range a.runHistory {
+		// Check runtime filter
+		if runtimeFilter != nil && run.Runtime != *runtimeFilter {
+			continue
+		}
+
+		// Check status filter
+		if statusFilter != nil && run.Status != *statusFilter {
+			continue
+		}
+
+		// Add copy to result
+		runCopy := *run
+		result = append(result, &runCopy)
+	}
+
+	// Sort by StartTime descending (most recent first)
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].StartTime.After(result[j].StartTime)
+	})
 
 	return result
 }

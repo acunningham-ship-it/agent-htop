@@ -697,7 +697,11 @@ Examples:
 							exitCode = 0
 						}
 					} else {
-						// Standard output: fleet state
+						// Standard output: fleet state with top-20 processes
+						systemState := agg.GetSystemState()
+						topProcs := systemState.Processes.TopByField(20, "cpu")
+						systemState.Processes.Processes = topProcs
+
 						fleetState := agg.GetFleetState()
 						data, err := json.MarshalIndent(fleetState, "", "  ")
 						if err != nil {

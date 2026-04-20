@@ -227,6 +227,51 @@ func (pl *ProcessList) FilterBy(filterType, filterValue string) []*ProcessInfo {
 	return result
 }
 
+// TopByField returns the top N processes sorted by the given field.
+// Default sort is by CPU % descending.
+func (pl *ProcessList) TopByField(limit int, field string) []*ProcessInfo {
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > len(pl.Processes) {
+		limit = len(pl.Processes)
+	}
+
+	// Make a copy and sort
+	procs := make([]*ProcessInfo, len(pl.Processes))
+	copy(procs, pl.Processes)
+
+	switch field {
+	case "cpu":
+		sort.Slice(procs, func(i, j int) bool {
+			return procs[i].CPUPercent > procs[j].CPUPercent
+		})
+	case "mem":
+		sort.Slice(procs, func(i, j int) bool {
+			return procs[i].MemPercent > procs[j].MemPercent
+		})
+	case "pid":
+		sort.Slice(procs, func(i, j int) bool {
+			return procs[i].PID < procs[j].PID
+		})
+	case "name":
+		sort.Slice(procs, func(i, j int) bool {
+			return procs[i].Name < procs[j].Name
+		})
+	case "age":
+		sort.Slice(procs, func(i, j int) bool {
+			return procs[i].CreateTime < procs[j].CreateTime
+		})
+	default:
+		// Default: sort by CPU descending
+		sort.Slice(procs, func(i, j int) bool {
+			return procs[i].CPUPercent > procs[j].CPUPercent
+		})
+	}
+
+	return procs[:limit]
+}
+
 // contains checks if str contains substr (case-insensitive).
 func contains(str, substr string) bool {
 	if len(substr) == 0 {

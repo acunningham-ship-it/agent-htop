@@ -1,4 +1,4 @@
-agent-htop
+/agent-htop
 dist/
 *.log
 .env
