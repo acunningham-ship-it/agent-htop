@@ -37,6 +37,9 @@ func (p *Parser) Parse(r io.Reader) (*AgentRun, error) {
 	}
 
 	scanner := bufio.NewScanner(r)
+	// Set larger buffer to handle large log lines (default 64KB is too small)
+	buffer := make([]byte, 0, 1024*1024) // 1MB
+	scanner.Buffer(buffer, 1024*1024)     // 1MB max token size
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" {
