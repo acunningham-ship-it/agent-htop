@@ -11,6 +11,7 @@ import (
 	"github.com/acunningham-ship-it/agent-htop/internal/action"
 	"github.com/acunningham-ship-it/agent-htop/internal/aggregator"
 	"github.com/acunningham-ship-it/agent-htop/internal/api"
+	"github.com/acunningham-ship-it/agent-htop/internal/queue"
 )
 
 // JSONRPCRequest represents an inbound JSON-RPC 2.0 request.
@@ -43,17 +44,19 @@ type Server struct {
 	companyID     string
 	callerAgentID string
 	actionLog     *action.ActionLog
+	queueManager  *queue.Manager
 
 	mu sync.Mutex // Protects scanner safety if needed
 }
 
 // NewServer creates a new MCP server.
-func NewServer(agg *aggregator.Aggregator, apiClient *api.Client, companyID, callerAgentID string) *Server {
+func NewServer(agg *aggregator.Aggregator, apiClient *api.Client, companyID, callerAgentID string, queueMgr *queue.Manager) *Server {
 	s := &Server{
 		agg:           agg,
 		apiClient:     apiClient,
 		companyID:     companyID,
 		callerAgentID: callerAgentID,
+		queueManager:  queueMgr,
 	}
 
 	// Initialize action log
@@ -139,6 +142,11 @@ func (s *Server) handleRequest(ctx context.Context, req *JSONRPCRequest) *JSONRP
 		"get_system_alerts":     s.handleGetSystemAlerts,
 		"get_network_metrics":   s.handleGetNetworkMetrics,
 		"get_agent_task":        s.handleGetAgentTask,
+		"enqueue_task":          s.handleEnqueueTask,
+		"claim_task":            s.handleClaimTask,
+		"complete_task":         s.handleCompleteTask,
+		"fail_task":             s.handleFailTask,
+		"list_tasks":            s.handleListTasks,
 	}
 
 	handler, ok := handlers[req.Method]

@@ -405,6 +405,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.actionFlash[msg.AgentID] = time.Now()
 		}
 		return m, nil
+	case ProcessKillMsg:
+		if msg.Error != "" {
+			m.killError = msg.Error
+			m.killErrorTime = time.Now()
+		}
+		return m, nil
 	case tea.WindowSizeMsg:
 		m.windowHeight = msg.Height
 		m.windowWidth = msg.Width
@@ -591,6 +597,18 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.viewMode = ViewModeLive
 		}
 		return m, nil
+	case "p":
+		// Shift+P would be 'P' which is already used for pause, so use lowercase 'p' for processes
+		// Actually, wait - the spec says 'P' (uppercase) toggles processes
+		// But Shift+P is used for pause. Let me use lowercase 'p' for processes
+		if m.viewMode == ViewModeLive {
+			m.viewMode = ViewModeProcesses
+			m.processSelectedRow = 0
+		} else if m.viewMode == ViewModeProcesses {
+			m.viewMode = ViewModeLive
+			m.processSelectedRow = 0
+		}
+		return m, nil
 	case "e":
 		// Export tool heatmap to CSV if in tools view
 		if m.viewMode == ViewModeTools && m.toolHeatmap != nil {
@@ -706,6 +724,50 @@ func (m *Model) nextSortMode() SortMode {
 	default:
 		return SortName
 	}
+}
+
+// nextProcessSortMode cycles to the next process sort mode
+func (m *Model) nextProcessSortMode() string {
+	switch m.processSortMode {
+	case "cpu":
+		return "mem"
+	case "mem":
+		return "age"
+	case "age":
+		return "name"
+	case "name":
+		return "user"
+	case "user":
+		return "pid"
+	case "pid":
+		return "cpu"
+	default:
+		return "cpu"
+	}
+}
+
+// getVisibleProcesses returns the filtered and sorted process list
+func (m *Model) getVisibleProcesses() []*sysinfo.ProcessInfo {
+	if m.fleet == nil || len(m.fleet.Processes) == 0 {
+		return []*sysinfo.ProcessInfo{}
+	}
+
+	// Copy processes
+	procs := make([]*sysinfo.ProcessInfo, len(m.fleet.Processes))
+	copy(procs, m.fleet.Processes)
+
+	pl := &sysinfo.ProcessList{Processes: procs}
+
+	// Apply filter if set
+	if m.processFilterType != "" {
+		procs = pl.FilterBy(m.processFilterType, m.processFilterValue)
+		pl.Processes = procs
+	}
+
+	// Sort
+	pl.SortBy(m.processSortMode)
+
+	return pl.Processes
 }
 
 // handleStateUpdate processes a state update from the aggregator.
@@ -1688,6 +1750,12 @@ type ActionResultMsg struct {
 	Error   string
 }
 
+// ProcessKillMsg is a message containing the result of killing a process.
+type ProcessKillMsg struct {
+	PID   int32
+	Error string
+}
+
 // subscribeToStateUpdates subscribes to state updates from the aggregator.
 func subscribeToStateUpdates(agg *aggregator.Aggregator) tea.Cmd {
 	return func() tea.Msg {
@@ -1723,6 +1791,18 @@ func pauseAgent(client *api.Client, agentID string) tea.Cmd {
 		}
 
 		return ActionResultMsg{AgentID: agentID, Error: ""}
+	}
+}
+
+// killProcessCmd kills a system process.
+func killProcessCmd(pid int32, signal string) tea.Cmd {
+	return func() tea.Msg {
+		err := sysinfo.KillProcess(pid, signal)
+		if err != nil {
+			return ProcessKillMsg{PID: pid, Error: fmt.Sprintf("Failed to kill PID %d: %v", pid, err)}
+		}
+
+		return ProcessKillMsg{PID: pid, Error: ""}
 	}
 }
 

@@ -621,3 +621,273 @@ func (s *Server) handleGetAgentTask(params json.RawMessage) (interface{}, *JSONR
 		"task_history":  history,
 	}, nil
 }
+
+// handleEnqueueTask enqueues a task to a named queue.
+func (s *Server) handleEnqueueTask(params json.RawMessage) (interface{}, *JSONRPCErr) {
+	if s.queueManager == nil {
+		return nil, &JSONRPCErr{
+			Code:    -32600,
+			Message: "Queue functionality not available",
+		}
+	}
+
+	var req struct {
+		QueueName string          `json:"queue"`
+		TaskSpec  json.RawMessage `json:"spec"`
+	}
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, &JSONRPCErr{
+			Code:    -32602,
+			Message: "Invalid params",
+			Data:    err.Error(),
+		}
+	}
+
+	if req.QueueName == "" {
+		return nil, &JSONRPCErr{
+			Code:    -32602,
+			Message: "Invalid params",
+			Data:    "queue name is required",
+		}
+	}
+
+	taskID, err := s.queueManager.Enqueue(req.QueueName, req.TaskSpec)
+	if err != nil {
+		return nil, &JSONRPCErr{
+			Code:    -32600,
+			Message: "Failed to enqueue task",
+			Data:    err.Error(),
+		}
+	}
+
+	return map[string]interface{}{
+		"task_id": taskID,
+	}, nil
+}
+
+// handleClaimTask claims the next pending task from a queue.
+func (s *Server) handleClaimTask(params json.RawMessage) (interface{}, *JSONRPCErr) {
+	if s.queueManager == nil {
+		return nil, &JSONRPCErr{
+			Code:    -32600,
+			Message: "Queue functionality not available",
+		}
+	}
+
+	var req struct {
+		QueueName string `json:"queue"`
+		AgentID   string `json:"agent_id"`
+	}
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, &JSONRPCErr{
+			Code:    -32602,
+			Message: "Invalid params",
+			Data:    err.Error(),
+		}
+	}
+
+	if req.QueueName == "" {
+		return nil, &JSONRPCErr{
+			Code:    -32602,
+			Message: "Invalid params",
+			Data:    "queue name is required",
+		}
+	}
+
+	agentID := req.AgentID
+	if agentID == "" {
+		agentID = s.getCallerAgentID(params)
+	}
+
+	task, err := s.queueManager.ClaimTask(req.QueueName, agentID)
+	if err != nil {
+		return nil, &JSONRPCErr{
+			Code:    -32600,
+			Message: "Failed to claim task",
+			Data:    err.Error(),
+		}
+	}
+
+	if task == nil {
+		return map[string]interface{}{
+			"task": nil,
+		}, nil
+	}
+
+	return map[string]interface{}{
+		"task": map[string]interface{}{
+			"id":       task.ID,
+			"queue_id": task.QueueID,
+			"queue":    task.QueueName,
+			"spec":     task.Spec,
+			"status":   task.Status,
+		},
+	}, nil
+}
+
+// handleCompleteTask marks a task as completed.
+func (s *Server) handleCompleteTask(params json.RawMessage) (interface{}, *JSONRPCErr) {
+	if s.queueManager == nil {
+		return nil, &JSONRPCErr{
+			Code:    -32600,
+			Message: "Queue functionality not available",
+		}
+	}
+
+	var req struct {
+		TaskID string          `json:"task_id"`
+		Result json.RawMessage `json:"result,omitempty"`
+	}
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, &JSONRPCErr{
+			Code:    -32602,
+			Message: "Invalid params",
+			Data:    err.Error(),
+		}
+	}
+
+	if req.TaskID == "" {
+		return nil, &JSONRPCErr{
+			Code:    -32602,
+			Message: "Invalid params",
+			Data:    "task_id is required",
+		}
+	}
+
+	if err := s.queueManager.CompleteTask(req.TaskID, req.Result); err != nil {
+		return nil, &JSONRPCErr{
+			Code:    -32600,
+			Message: "Failed to complete task",
+			Data:    err.Error(),
+		}
+	}
+
+	return map[string]interface{}{
+		"success": true,
+	}, nil
+}
+
+// handleFailTask marks a task as failed, triggering retries or dead-letter.
+func (s *Server) handleFailTask(params json.RawMessage) (interface{}, *JSONRPCErr) {
+	if s.queueManager == nil {
+		return nil, &JSONRPCErr{
+			Code:    -32600,
+			Message: "Queue functionality not available",
+		}
+	}
+
+	var req struct {
+		TaskID string `json:"task_id"`
+		Reason string `json:"reason,omitempty"`
+	}
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, &JSONRPCErr{
+			Code:    -32602,
+			Message: "Invalid params",
+			Data:    err.Error(),
+		}
+	}
+
+	if req.TaskID == "" {
+		return nil, &JSONRPCErr{
+			Code:    -32602,
+			Message: "Invalid params",
+			Data:    "task_id is required",
+		}
+	}
+
+	if err := s.queueManager.FailTask(req.TaskID, req.Reason); err != nil {
+		return nil, &JSONRPCErr{
+			Code:    -32600,
+			Message: "Failed to fail task",
+			Data:    err.Error(),
+		}
+	}
+
+	return map[string]interface{}{
+		"success": true,
+	}, nil
+}
+
+// handleListTasks lists tasks in a queue with optional status filter.
+func (s *Server) handleListTasks(params json.RawMessage) (interface{}, *JSONRPCErr) {
+	if s.queueManager == nil {
+		return nil, &JSONRPCErr{
+			Code:    -32600,
+			Message: "Queue functionality not available",
+		}
+	}
+
+	var req struct {
+		QueueName *string `json:"queue,omitempty"`
+		Status    *string `json:"status,omitempty"`
+		Limit     *int    `json:"limit,omitempty"`
+	}
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, &JSONRPCErr{
+			Code:    -32602,
+			Message: "Invalid params",
+			Data:    err.Error(),
+		}
+	}
+
+	// If no queue specified, return stats for all queues
+	if req.QueueName == nil || *req.QueueName == "" {
+		snapshot, err := s.queueManager.GetAllStats()
+		if err != nil {
+			return nil, &JSONRPCErr{
+				Code:    -32600,
+				Message: "Failed to get queue stats",
+				Data:    err.Error(),
+			}
+		}
+
+		return map[string]interface{}{
+			"queues":      snapshot.Queues,
+			"total_tasks": snapshot.TotalTasks,
+			"updated_at":  snapshot.UpdatedAt,
+		}, nil
+	}
+
+	limit := 100
+	if req.Limit != nil && *req.Limit > 0 {
+		limit = *req.Limit
+	}
+
+	status := ""
+	if req.Status != nil {
+		status = *req.Status
+	}
+
+	tasks, err := s.queueManager.ListTasks(*req.QueueName, status, limit)
+	if err != nil {
+		return nil, &JSONRPCErr{
+			Code:    -32600,
+			Message: "Failed to list tasks",
+			Data:    err.Error(),
+		}
+	}
+
+	taskList := make([]map[string]interface{}, len(tasks))
+	for i, task := range tasks {
+		taskList[i] = map[string]interface{}{
+			"id":           task.ID,
+			"queue_id":     task.QueueID,
+			"queue":        task.QueueName,
+			"status":       task.Status,
+			"claimed_by":   task.ClaimedBy,
+			"claimed_at":   task.ClaimedAt,
+			"completed_at": task.CompletedAt,
+			"retry_count":  task.RetryCount,
+			"max_retries":  task.MaxRetries,
+			"created_at":   task.CreatedAt,
+			"updated_at":   task.UpdatedAt,
+		}
+	}
+
+	return map[string]interface{}{
+		"queue": *req.QueueName,
+		"status": status,
+		"tasks":  taskList,
+	}, nil
+}
