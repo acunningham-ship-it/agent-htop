@@ -16,6 +16,8 @@ import (
 	"github.com/acunningham-ship-it/agent-htop/internal/aggregator"
 	"github.com/acunningham-ship-it/agent-htop/internal/api"
 	"github.com/acunningham-ship-it/agent-htop/internal/parser"
+	"github.com/acunningham-ship-it/agent-htop/internal/queue"
+	"github.com/acunningham-ship-it/agent-htop/internal/sysinfo"
 )
 
 // ViewMode represents the current view state
@@ -25,6 +27,7 @@ const (
 	ViewModeLive       ViewMode = "live"
 	ViewModeHistorical ViewMode = "historical"
 	ViewModeTools      ViewMode = "tools"
+	ViewModeQueue      ViewMode = "queue"
 )
 
 // FilterMode represents the current filter state
@@ -95,10 +98,18 @@ type Model struct {
 	// Alert state
 	lastAlertTime    time.Time
 	alertFlashCycle  int // 0-2 for flashing effect (0 = show, 1 = dim, 2 = show, repeat)
+
+	// Process view state
+	processSortMode string // Sort mode for processes
+	processPageSize int     // Items per page for process view
+	processPage     int     // Current page number for process view
+
+	// Queue view state
+	queueManager *queue.Manager
 }
 
 // New creates a new TUI model.
-func New(agg *aggregator.Aggregator, client *api.Client, companyID string) *Model {
+func New(agg *aggregator.Aggregator, client *api.Client, companyID string, queueManager *queue.Manager) *Model {
 	// Get active runtimes from aggregator
 	activeRuntimes := agg.GetActiveRuntimes()
 	runtimeStrs := make([]string, len(activeRuntimes))
@@ -127,6 +138,10 @@ func New(agg *aggregator.Aggregator, client *api.Client, companyID string) *Mode
 		companyID:     companyID,
 		runtimes:      runtimeStrs,
 		runtimeStatus: runtimeStatus,
+		processSortMode: "cpu",
+		processPageSize: 20,
+		processPage:     0,
+		queueManager:  queueManager,
 	}
 	state := agg.GetFleetState()
 	if state != nil {
@@ -470,6 +485,14 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.viewMode = ViewModeLive
 		}
 		return m, nil
+	case "Q":
+		// Shift+Q to toggle queue view
+		if m.viewMode == ViewModeLive {
+			m.viewMode = ViewModeQueue
+		} else if m.viewMode == ViewModeQueue {
+			m.viewMode = ViewModeLive
+		}
+		return m, nil
 	case "e":
 		// Export tool heatmap to CSV if in tools view
 		if m.viewMode == ViewModeTools && m.toolHeatmap != nil {
@@ -618,7 +641,9 @@ func (m *Model) View() string {
 	header := m.renderHeader()
 
 	var tableView string
-	if m.viewMode == ViewModeTools {
+	if m.viewMode == ViewModeQueue {
+		tableView = m.renderQueueView()
+	} else if m.viewMode == ViewModeTools {
 		tableView = m.renderToolHeatmap()
 	} else if m.viewMode == ViewModeHistorical {
 		tableView = m.renderHistoricalView()
@@ -669,6 +694,101 @@ func (m *Model) View() string {
 		confirmation,
 		successMsg,
 		errorMsg,
+	)
+}
+
+// renderProcessesView renders the process list view
+func (m *Model) renderProcessesView() string {
+	if m.fleet == nil || len(m.fleet.Processes) == 0 {
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("No processes available\n")
+	}
+
+	// Build header
+	header := fmt.Sprintf("System Processes (%d total) - Sort: %s\n", len(m.fleet.Processes), m.processSortMode)
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
+	styledHeader := headerStyle.Render(header)
+
+	// Sort processes by current sort mode
+	procs := make([]*sysinfo.ProcessInfo, len(m.fleet.Processes))
+	copy(procs, m.fleet.Processes)
+
+	sorted := &sysinfo.ProcessList{Processes: procs}
+	sorted.SortBy(m.processSortMode)
+
+	// Pagination
+	totalPages := (len(sorted.Processes) + m.processPageSize - 1) / m.processPageSize
+	if totalPages == 0 {
+		totalPages = 1
+	}
+	if m.processPage >= totalPages {
+		m.processPage = totalPages - 1
+	}
+
+	startIdx := m.processPage * m.processPageSize
+	endIdx := startIdx + m.processPageSize
+	if endIdx > len(sorted.Processes) {
+		endIdx = len(sorted.Processes)
+	}
+
+	// Build table
+	columns := []table.Column{
+		{Title: "PID", Width: 8},
+		{Title: "NAME", Width: 20},
+		{Title: "CPU%", Width: 8},
+		{Title: "MEM%", Width: 8},
+		{Title: "MEM_MB", Width: 10},
+		{Title: "USER", Width: 12},
+		{Title: "COMMAND", Width: 35},
+	}
+
+	var rows []table.Row
+	for _, proc := range sorted.Processes[startIdx:endIdx] {
+		cmdLine := truncate(proc.CmdLine, 35)
+		if cmdLine == "" {
+			cmdLine = proc.Name
+		}
+		row := table.Row{
+			fmt.Sprintf("%d", proc.PID),
+			truncate(proc.Name, 20),
+			fmt.Sprintf("%.1f%%", proc.CPUPercent),
+			fmt.Sprintf("%.1f%%", proc.MemPercent),
+			fmt.Sprintf("%d MB", proc.MemMB),
+			truncate(proc.User, 12),
+			cmdLine,
+		}
+		rows = append(rows, row)
+	}
+
+	procTable := table.New(
+		table.WithColumns(columns),
+		table.WithRows(rows),
+		table.WithFocused(false),
+		table.WithHeight(15),
+	)
+
+	s := table.DefaultStyles()
+	s.Header = s.Header.
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderBottom(true).
+		Bold(false)
+	procTable.SetStyles(s)
+
+	// Pagination info
+	paginationInfo := fmt.Sprintf("\n  Page %d of %d  |  Showing %d-%d of %d processes",
+		m.processPage+1, totalPages, startIdx+1, endIdx, len(sorted.Processes))
+	paginationStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
+	styledPagination := paginationStyle.Render(paginationInfo)
+
+	// Help text
+	helpText := "\n  [p]back to live view  [s]cycle sort  [↑/↓]page"
+	styledHelp := lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(helpText)
+
+	return lipgloss.JoinVertical(
+		lipgloss.Left,
+		styledHeader,
+		procTable.View(),
+		styledPagination,
+		styledHelp,
 	)
 }
 
@@ -952,8 +1072,8 @@ func (m *Model) renderProjectionLine() string {
 	return lipgloss.NewStyle().Foreground(colorCode).Render(line)
 }
 
-// renderSystemMetrics builds a line showing host CPU, RAM, and load metrics.
-// Format: "  CPU 34.2% | RAM 6.2/16.0 GB | Load 1.2 2.3 3.1"
+// renderSystemMetrics builds a line showing host CPU, RAM, load, and network metrics.
+// Format: "  CPU 34.2% | RAM 6.2/16.0 GB | Load 1.2 2.3 3.1 | eth0 ↑4.2MB/s ↓12.1MB/s"
 func (m *Model) renderSystemMetrics() string {
 	if m.fleet == nil || m.fleet.HostMetrics == nil {
 		return ""
@@ -969,8 +1089,50 @@ func (m *Model) renderSystemMetrics() string {
 	ramStr := fmt.Sprintf("RAM %.1f/%.0f GB", float64(mem.UsedMB)/1024.0, float64(mem.TotalMB)/1024.0)
 	loadStr := fmt.Sprintf("Load %.1f %.1f %.1f", cpu.Load1Min, cpu.Load5Min, cpu.Load15Min)
 
-	line := fmt.Sprintf("  %s | %s | %s\n", cpuStr, ramStr, loadStr)
+	// Add network metrics if available
+	parts := []string{cpuStr, ramStr, loadStr}
+	if m.fleet.HostMetrics.Network != nil {
+		netStr := formatNetworkMetrics(m.fleet.HostMetrics.Network)
+		if netStr != "" {
+			parts = append(parts, netStr)
+		}
+	}
+
+	line := fmt.Sprintf("  %s\n", strings.Join(parts, " | "))
 	return lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(line)
+}
+
+// formatNetworkMetrics formats network metrics into a compact display string.
+// Example: "eth0 ↑4.2MB/s ↓12.1MB/s | wifi: MyNet -62dBm"
+func formatNetworkMetrics(net *sysinfo.NetworkMetrics) string {
+	var parts []string
+
+	// Find primary interface (highest throughput)
+	var primaryIface *sysinfo.InterfaceMetrics
+	var maxThroughput float64
+	for i := range net.Interfaces {
+		throughput := net.Interfaces[i].ThroughputUp + net.Interfaces[i].ThroughputDn
+		if throughput > maxThroughput && net.Interfaces[i].State == "up" {
+			maxThroughput = throughput
+			primaryIface = &net.Interfaces[i]
+		}
+	}
+
+	// Format primary interface
+	if primaryIface != nil {
+		upMB := primaryIface.ThroughputUp / 1024.0 / 1024.0
+		dnMB := primaryIface.ThroughputDn / 1024.0 / 1024.0
+		ifaceStr := fmt.Sprintf("%s ↑%.1fMB/s ↓%.1fMB/s", primaryIface.Name, upMB, dnMB)
+		parts = append(parts, ifaceStr)
+	}
+
+	// Add WiFi info if available
+	if net.WiFi != nil && net.WiFi.Connected {
+		wifiStr := fmt.Sprintf("wifi: %s %ddBm", net.WiFi.SSID, net.WiFi.SignalDBm)
+		parts = append(parts, wifiStr)
+	}
+
+	return strings.Join(parts, " | ")
 }
 
 // renderAlertBanner renders active health alerts with flashing effect for critical alerts.
@@ -1221,22 +1383,25 @@ func (m *Model) renderDetailDrawer() string {
 	statusColor := m.colorStatus(run.Status, run.IsError)
 	lines = append(lines, fmt.Sprintf("Status: %s", statusColor))
 
-	// Last 5 tool calls
-	if len(run.ToolCalls) > 0 {
+	// Task history from agent view (with full details)
+	if agent.TaskHistory != nil && len(agent.TaskHistory) > 0 {
 		lines = append(lines, "")
-		lines = append(lines, "Recent Tool Calls:")
-		// Show up to 5 most recent tool calls
-		start := len(run.ToolCalls) - 5
-		if start < 0 {
-			start = 0
-		}
-		for i := start; i < len(run.ToolCalls); i++ {
-			tc := run.ToolCalls[i]
-			timeStr := ""
-			if !tc.StartTime.IsZero() {
-				timeStr = tc.StartTime.Format("15:04:05")
+		lines = append(lines, "Task History:")
+		for i, task := range agent.TaskHistory {
+			taskNum := i + 1
+			status := "✓"
+			if task.IsError {
+				status = "✗"
 			}
-			lines = append(lines, fmt.Sprintf("  [%s] %s", timeStr, truncate(tc.Name, 30)))
+
+			// Format: "1. ✓ Tool: args (5s)" or "1. ✗ Tool: args (12s) [ERROR]"
+			taskLine := fmt.Sprintf("  #%d %s %s: %s (%ds)",
+				taskNum, status, task.ToolName, truncate(task.ArgsSummary, 25), task.DurationSec)
+
+			if task.IsError && task.Result != "" {
+				taskLine += " [" + truncate(task.Result, 20) + "]"
+			}
+			lines = append(lines, taskLine)
 		}
 	}
 
@@ -1459,6 +1624,79 @@ func pauseAgent(client *api.Client, agentID string) tea.Cmd {
 
 		return ActionResultMsg{AgentID: agentID, Error: ""}
 	}
+}
+
+// renderQueueView renders the task queue view.
+func (m *Model) renderQueueView() string {
+	if m.queueManager == nil {
+		return "Queue manager not initialized\n"
+	}
+
+	// Get queue stats
+	snapshot, err := m.queueManager.GetAllStats()
+	if err != nil {
+		return fmt.Sprintf("Error loading queue stats: %v\n", err)
+	}
+
+	// Build queue summary table
+	var queueHeader = "QUEUE              PENDING  CLAIMED  COMPLETE  FAILED  AVG TIME\n"
+	var queueRows string
+	for _, stats := range snapshot.Queues {
+		avgTime := "-"
+		if stats.AvgTimeMs > 0 {
+			seconds := stats.AvgTimeMs / 1000
+			ms := stats.AvgTimeMs % 1000
+			if seconds > 0 {
+				avgTime = fmt.Sprintf("%.1fs", float64(stats.AvgTimeMs)/1000)
+			} else {
+				avgTime = fmt.Sprintf("%dms", ms)
+			}
+		}
+		queueRows += fmt.Sprintf("%-18s %7d  %7d  %8d  %6d  %s\n",
+			truncate(stats.Name, 18),
+			stats.Pending,
+			stats.Claimed,
+			stats.Completed,
+			stats.Failed,
+			avgTime,
+		)
+	}
+
+	// Get recent tasks from all queues
+	var recentTasks string
+	recentTasksHeader := "RECENT TASKS:\n"
+	recentTasksHeader += "TASK ID          QUEUE              AGENT               STATUS     CREATED\n"
+
+	queueNames := m.queueManager.GetQueueNames()
+	var allTasks []*queue.Task
+	for _, qName := range queueNames {
+		tasks, _ := m.queueManager.ListTasks(qName, "", 5) // Get 5 most recent from each queue
+		allTasks = append(allTasks, tasks...)
+	}
+
+	// Sort by created_at descending and take top 20
+	if len(allTasks) > 20 {
+		allTasks = allTasks[:20]
+	}
+
+	for _, task := range allTasks {
+		created := task.CreatedAt.Format("15:04:05")
+		recentTasks += fmt.Sprintf("%-16s  %-18s  %-19s  %-10s  %s\n",
+			truncate(task.ID, 16),
+			truncate(task.QueueName, 18),
+			truncate(task.ClaimedBy, 19),
+			truncate(task.Status, 10),
+			created,
+		)
+	}
+
+	// Combine sections
+	view := "Task Queues  (Press Q to toggle | H for history | T for tools | ? for help)\n\n"
+	view += queueHeader
+	view += queueRows
+	view += "\n" + recentTasksHeader + recentTasks
+
+	return view
 }
 
 // resumeAgent resumes an agent via the Paperclip API.

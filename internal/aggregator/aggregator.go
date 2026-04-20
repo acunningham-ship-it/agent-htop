@@ -28,8 +28,9 @@ type FleetState struct {
 
 // HostMetrics contains aggregated host system metrics.
 type HostMetrics struct {
-	CPU    *sysinfo.CPUMetrics
-	Memory *sysinfo.MemoryMetrics
+	CPU     *sysinfo.CPUMetrics
+	Memory  *sysinfo.MemoryMetrics
+	Network *sysinfo.NetworkMetrics
 }
 
 // PolicyEvaluator evaluates policies against session context.
@@ -445,8 +446,10 @@ func (a *Aggregator) updateFleetState(ctx context.Context, run *parser.AgentRun)
 	}
 	cpuMetrics := a.cpuCollector.Get()
 	memMetrics := a.memoryCollector.Get()
+	networkMetrics := a.networkCollector.Get()
 	a.fleetState.HostMetrics.CPU = cpuMetrics
 	a.fleetState.HostMetrics.Memory = memMetrics
+	a.fleetState.HostMetrics.Network = networkMetrics
 
 	// Evaluate health alerts
 	a.evaluateAlerts(cpuMetrics, memMetrics)
@@ -550,6 +553,21 @@ func (a *Aggregator) GetFleetState() *FleetState {
 		if a.fleetState.HostMetrics.Memory != nil {
 			memoryCopy := *a.fleetState.HostMetrics.Memory
 			stateCopy.HostMetrics.Memory = &memoryCopy
+		}
+		if a.fleetState.HostMetrics.Network != nil {
+			networkCopy := *a.fleetState.HostMetrics.Network
+			// Deep copy interfaces slice
+			if networkCopy.Interfaces != nil {
+				interfacesCopy := make([]sysinfo.InterfaceMetrics, len(networkCopy.Interfaces))
+				copy(interfacesCopy, networkCopy.Interfaces)
+				networkCopy.Interfaces = interfacesCopy
+			}
+			// Deep copy WiFi if present
+			if networkCopy.WiFi != nil {
+				wifiCopy := *networkCopy.WiFi
+				networkCopy.WiFi = &wifiCopy
+			}
+			stateCopy.HostMetrics.Network = &networkCopy
 		}
 	}
 
