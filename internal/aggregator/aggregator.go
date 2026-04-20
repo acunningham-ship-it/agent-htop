@@ -45,6 +45,8 @@ type AgentView struct {
 	Runtime       parser.Runtime            // Which runtime this agent runs on
 	Anomalies     []*anomaly.AnomalyEvent // Active anomalies
 	Projection    *Projection              // Cost projection for today
+	CurrentTask   *parser.CurrentTask      // Current active task
+	TaskHistory   []*parser.TaskHistory    // Historical task entries (last 10)
 }
 
 // Aggregator subscribes to watcher events, parses logs, and maintains fleet state.
@@ -366,6 +368,8 @@ func (a *Aggregator) updateFleetState(ctx context.Context, run *parser.AgentRun)
 		ElapsedMS:    run.DurationMS,
 		Runtime:      run.Runtime,
 		Projection:   projection,
+		CurrentTask:  computeCurrentTask(run, now),
+		TaskHistory:  buildTaskHistory(run),
 	}
 
 	// Determine status
@@ -709,6 +713,39 @@ func (a *Aggregator) GetToolHeatmap(filterAgentID string) *parser.ToolHeatmap {
 	return ComputeToolHeatmap(runHistory, filterAgentID)
 }
 
+// GetAgentTask returns the current task and history for a given agent ID.
+// This is the data structure returned by the get_agent_task() MCP tool.
+func (a *Aggregator) GetAgentTask(agentID string) *AgentTaskInfo {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	// Find the agent in fleet state
+	for _, agent := range a.fleetState.Agents {
+		if agent.AgentID == agentID {
+			return &AgentTaskInfo{
+				AgentID:     agentID,
+				AgentName:   agent.AgentName,
+				Status:      agent.Status,
+				CurrentTask: agent.CurrentTask,
+				TaskHistory: agent.TaskHistory,
+				UpdatedAt:   a.fleetState.UpdatedAt,
+			}
+		}
+	}
+
+	return nil
+}
+
+// AgentTaskInfo is the response structure for the get_agent_task() MCP tool.
+type AgentTaskInfo struct {
+	AgentID     string                `json:"agent_id"`
+	AgentName   string                `json:"agent_name"`
+	Status      string                `json:"status"`
+	CurrentTask *parser.CurrentTask   `json:"current_task,omitempty"`
+	TaskHistory []*parser.TaskHistory `json:"task_history,omitempty"`
+	UpdatedAt   time.Time             `json:"updated_at"`
+}
+
 // GetSystemState returns the complete unified system state snapshot.
 // This is used for get_system_state() MCP tool and --full JSON output.
 func (a *Aggregator) GetSystemState() *sysinfo.SystemState {
@@ -731,4 +768,161 @@ func (a *Aggregator) GetSystemState() *sysinfo.SystemState {
 		},
 		Processes: *a.processCollector.Get(),
 	}
+}
+
+// buildTaskHistory constructs a task history from completed tool calls in an AgentRun.
+// It returns the last 10 completed tasks in chronological order (oldest first).
+func buildTaskHistory(run *parser.AgentRun) []*parser.TaskHistory {
+	if run == nil || len(run.ToolCalls) == 0 {
+		return make([]*parser.TaskHistory, 0)
+	}
+
+	history := make([]*parser.TaskHistory, 0)
+
+	// Iterate through tool calls and collect completed ones
+	for _, toolCall := range run.ToolCalls {
+		// Only include completed tool calls (those with an EndTime)
+		if toolCall.EndTime.IsZero() {
+			continue
+		}
+
+		// Calculate duration
+		duration := int64(0)
+		if !toolCall.StartTime.IsZero() && !toolCall.EndTime.IsZero() {
+			duration = int64(toolCall.EndTime.Sub(toolCall.StartTime).Seconds())
+		}
+
+		// Extract argument summary
+		argsSummary := extractArgsSummary(toolCall.Name, toolCall.Input)
+
+		// Create task history entry
+		taskEntry := &parser.TaskHistory{
+			ToolName:    toolCall.Name,
+			ArgsSummary: argsSummary,
+			StartedAt:   toolCall.StartTime,
+			EndedAt:     toolCall.EndTime,
+			DurationSec: duration,
+			IsError:     toolCall.IsError,
+			Result:      toolCall.Result,
+		}
+
+		history = append(history, taskEntry)
+	}
+
+	// Keep only the last 10 entries
+	if len(history) > 10 {
+		history = history[len(history)-10:]
+	}
+
+	return history
+}
+
+// computeCurrentTask extracts the current active task from an AgentRun.
+// It returns a CurrentTask describing what the agent is currently executing.
+func computeCurrentTask(run *parser.AgentRun, now time.Time) *parser.CurrentTask {
+	if run == nil || len(run.ToolCalls) == 0 {
+		return nil
+	}
+
+	// Get the last tool call
+	lastTool := run.ToolCalls[len(run.ToolCalls)-1]
+
+	// Only consider a tool call as "current" if it's still in progress (no EndTime yet)
+	// Once it has an EndTime, it's completed and we shouldn't show it as the current task
+	if !lastTool.EndTime.IsZero() {
+		return nil
+	}
+
+	// Compute elapsed time since tool was invoked
+	elapsedSec := int64(0)
+	if !lastTool.StartTime.IsZero() {
+		elapsedSec = int64(now.Sub(lastTool.StartTime).Seconds())
+	}
+
+	// Extract a summary of the tool arguments
+	argsSummary := extractArgsSummary(lastTool.Name, lastTool.Input)
+
+	// Detect if stalled (tool has been running for more than 30 seconds with no completion)
+	// Note: stalled detection also requires the session to still be in "running" state
+	isStalled := elapsedSec > 30 && run.Status == "running"
+
+	return &parser.CurrentTask{
+		ToolName:    lastTool.Name,
+		ArgsSummary: argsSummary,
+		StartedAt:   lastTool.StartTime,
+		ElapsedSec:  elapsedSec,
+		IsStalled:   isStalled,
+		LastEventAt: now,
+	}
+}
+
+// extractArgsSummary creates a human-readable summary of tool arguments.
+// For example: "README.md" for file reads, "npm test" for bash commands.
+func extractArgsSummary(toolName string, input map[string]interface{}) string {
+	if input == nil || len(input) == 0 {
+		return ""
+	}
+
+	switch toolName {
+	case "Read":
+		// Extract file path
+		if path, ok := input["file_path"].(string); ok {
+			return truncateArg(path, 30)
+		}
+	case "Write":
+		// Extract file path
+		if path, ok := input["file_path"].(string); ok {
+			return truncateArg(path, 30)
+		}
+	case "Edit":
+		// Extract file path
+		if path, ok := input["file_path"].(string); ok {
+			return truncateArg(path, 30)
+		}
+	case "Bash":
+		// Extract command
+		if cmd, ok := input["command"].(string); ok {
+			// Take first word or short summary
+			parts := strings.Fields(cmd)
+			if len(parts) > 0 {
+				summary := parts[0]
+				if len(parts) > 1 {
+					summary += " " + parts[1]
+				}
+				return truncateArg(summary, 30)
+			}
+		}
+	case "Glob":
+		// Extract pattern
+		if pattern, ok := input["pattern"].(string); ok {
+			return "glob: " + truncateArg(pattern, 25)
+		}
+	case "Grep":
+		// Extract pattern
+		if pattern, ok := input["pattern"].(string); ok {
+			return "grep: " + truncateArg(pattern, 25)
+		}
+	case "WebFetch", "WebSearch":
+		// Extract URL
+		if url, ok := input["url"].(string); ok {
+			return truncateArg(url, 30)
+		}
+	}
+
+	// Default: use first string argument we can find
+	for _, v := range input {
+		if s, ok := v.(string); ok && len(s) > 0 {
+			return truncateArg(s, 30)
+		}
+	}
+
+	return ""
+}
+
+// truncateArg truncates an argument to a maximum length.
+func truncateArg(arg string, maxLen int) string {
+	if len(arg) <= maxLen {
+		return arg
+	}
+	return arg[:maxLen-3] + "..."
 }

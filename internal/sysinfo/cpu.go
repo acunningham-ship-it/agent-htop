@@ -10,15 +10,15 @@ import (
 
 // CPUMetrics contains CPU-related system information.
 type CPUMetrics struct {
-	PercentPerCore []float64 // Per-core CPU percentage
-	AveragePercent float64   // Average CPU percentage across all cores
-	Load1Min       float64   // 1-minute load average
-	Load5Min       float64   // 5-minute load average
-	Load15Min      float64   // 15-minute load average
-	LogicalCores   int       // Number of logical CPU cores
-	PhysicalCores  int       // Number of physical CPU cores
-	Uptime         uint64    // System uptime in seconds
-	UpdatedAt      time.Time
+	PercentPerCore []float64 `json:"percentPerCore"` // Per-core CPU percentage
+	AveragePercent float64   `json:"averagePercent"` // Average CPU percentage across all cores
+	Load1Min       float64   `json:"load1Min"`       // 1-minute load average
+	Load5Min       float64   `json:"load5Min"`       // 5-minute load average
+	Load15Min      float64   `json:"load15Min"`      // 15-minute load average
+	LogicalCores   int       `json:"logicalCores"`   // Number of logical CPU cores
+	PhysicalCores  int       `json:"physicalCores"`  // Number of physical CPU cores
+	Uptime         uint64    `json:"uptime"`         // System uptime in seconds
+	UpdatedAt      time.Time `json:"updatedAt"`
 }
 
 // CPUCollector periodically collects CPU metrics.

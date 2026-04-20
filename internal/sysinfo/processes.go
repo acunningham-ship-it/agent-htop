@@ -16,20 +16,20 @@ type ProcessInfo struct {
 	PID        int32   `json:"pid"`
 	PPID       int32   `json:"ppid"`
 	Name       string  `json:"name"`
-	Cmdline    string  `json:"cmdline"`
+	CmdLine    string  `json:"cmdline"`
 	User       string  `json:"user"`
 	Status     string  `json:"status"` // S=sleeping, R=running, Z=zombie, etc.
 	CPUPercent float64 `json:"cpu_percent"`
 	MemPercent float64 `json:"mem_percent"`
 	MemMB      uint64  `json:"mem_mb"`
 	CreateTime int64   `json:"create_time"` // Unix timestamp
-	UpdatedAt  time.Time
+	UpdatedAt  time.Time `json:"updatedAt"`
 }
 
 // ProcessList contains all current processes.
 type ProcessList struct {
-	Processes []*ProcessInfo
-	UpdatedAt time.Time
+	Processes []*ProcessInfo `json:"processes"`
+	UpdatedAt time.Time      `json:"updatedAt"`
 }
 
 // ProcessCollector periodically collects process information.
@@ -128,7 +128,7 @@ func (p *ProcessCollector) collect() error {
 
 		// Get command line
 		if cmdline, err := proc.Cmdline(); err == nil {
-			info.Cmdline = cmdline
+			info.CmdLine = cmdline
 		}
 
 		// Get user
@@ -217,7 +217,7 @@ func (pl *ProcessList) FilterBy(filterType, filterValue string) []*ProcessInfo {
 				result = append(result, proc)
 			}
 		case "cmd":
-			if contains(proc.Cmdline, filterValue) || contains(proc.Name, filterValue) {
+			if contains(proc.CmdLine, filterValue) || contains(proc.Name, filterValue) {
 				result = append(result, proc)
 			}
 		default:

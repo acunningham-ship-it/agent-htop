@@ -9,17 +9,17 @@ import (
 
 // MemoryMetrics contains memory-related system information.
 type MemoryMetrics struct {
-	TotalMB        uint64    // Total RAM in MB
-	UsedMB         uint64    // Used RAM in MB
-	FreeMB         uint64    // Free RAM in MB
-	AvailableMB    uint64    // Available RAM in MB
-	UsedPercent    float64   // Used percentage (0-100)
-	SwapTotalMB    uint64    // Total swap in MB
-	SwapUsedMB     uint64    // Used swap in MB
-	SwapFreeMB     uint64    // Free swap in MB
-	SwapUsedPercent float64  // Swap used percentage (0-100)
-	CacheMB        uint64    // OS cache in MB
-	UpdatedAt      time.Time
+	TotalMB        uint64    `json:"totalMB"`        // Total RAM in MB
+	UsedMB         uint64    `json:"usedMB"`         // Used RAM in MB
+	FreeMB         uint64    `json:"freeMB"`         // Free RAM in MB
+	AvailableMB    uint64    `json:"availableMB"`    // Available RAM in MB
+	UsedPercent    float64   `json:"usedPercent"`    // Used percentage (0-100)
+	SwapTotalMB    uint64    `json:"swapTotalMB"`    // Total swap in MB
+	SwapUsedMB     uint64    `json:"swapUsedMB"`     // Used swap in MB
+	SwapFreeMB     uint64    `json:"swapFreeMB"`     // Free swap in MB
+	SwapUsedPercent float64  `json:"swapUsedPercent"` // Swap used percentage (0-100)
+	CacheMB        uint64    `json:"cacheMB"`        // OS cache in MB
+	UpdatedAt      time.Time `json:"updatedAt"`
 }
 
 // MemoryCollector periodically collects memory metrics.

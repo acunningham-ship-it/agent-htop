@@ -3,6 +3,8 @@ package sysinfo
 import (
 	"sync"
 	"time"
+
+	"github.com/acunningham-ship-it/agent-htop/internal/health"
 )
 
 // SystemState represents the complete system state snapshot.
@@ -16,10 +18,11 @@ type SystemState struct {
 
 // HostState contains host-level system metrics.
 type HostState struct {
-	CPU      CPUMetrics    `json:"cpu"`
-	Memory   MemoryMetrics `json:"memory"`
-	Uptime   UptimeInfo    `json:"uptime"`
-	UpdatedAt time.Time    `json:"updatedAt"`
+	CPU       CPUMetrics      `json:"cpu"`
+	Memory    MemoryMetrics   `json:"memory"`
+	Uptime    UptimeInfo      `json:"uptime"`
+	Alerts    []interface{}   `json:"alerts,omitempty"` // []health.Alert - omitted if empty
+	UpdatedAt time.Time       `json:"updatedAt"`
 }
 
 // UptimeInfo contains uptime information.
@@ -34,6 +37,7 @@ type StateCollector struct {
 	cpuCollector     *CPUCollector
 	memCollector     *MemoryCollector
 	procCollector    *ProcessCollector
+	alertEvaluator   *health.AlertEvaluator
 	lastSnapshot     *SystemState
 	lastSnapshotTime time.Time
 	cacheTTL         time.Duration // How long to cache before re-collecting
@@ -42,10 +46,11 @@ type StateCollector struct {
 // NewStateCollector creates a new unified state collector.
 func NewStateCollector(interval time.Duration, cacheTTL time.Duration) *StateCollector {
 	return &StateCollector{
-		cpuCollector:  NewCPUCollector(interval),
-		memCollector:  NewMemoryCollector(interval),
-		procCollector: NewProcessCollector(interval),
-		cacheTTL:      cacheTTL,
+		cpuCollector:   NewCPUCollector(interval),
+		memCollector:   NewMemoryCollector(interval),
+		procCollector:  NewProcessCollector(interval),
+		alertEvaluator: health.NewAlertEvaluator(),
+		cacheTTL:       cacheTTL,
 	}
 }
 
@@ -90,16 +95,32 @@ func (sc *StateCollector) GetSnapshot() *SystemState {
 		uptime = u
 	}
 
+	// Build the snapshot
+	hostState := HostState{
+		CPU:       *sc.cpuCollector.Get(),
+		Memory:    *sc.memCollector.Get(),
+		Uptime:    UptimeInfo{Seconds: uptime, UpdatedAt: now},
+		UpdatedAt: now,
+	}
+
+	// Evaluate alerts and add them to the snapshot
 	snapshot := &SystemState{
 		SchemaVersion: 1,
 		Timestamp:     now,
-		Host: HostState{
-			CPU:      *sc.cpuCollector.Get(),
-			Memory:   *sc.memCollector.Get(),
-			Uptime:   UptimeInfo{Seconds: uptime, UpdatedAt: now},
-			UpdatedAt: now,
-		},
-		Processes: *sc.procCollector.Get(),
+		Host:          hostState,
+		Processes:     *sc.procCollector.Get(),
+	}
+
+	// Evaluate alerts against the snapshot
+	sc.alertEvaluator.Evaluate(snapshot)
+	activeAlerts := sc.alertEvaluator.GetActiveAlerts()
+	if len(activeAlerts) > 0 {
+		// Convert alerts to interface slice for JSON marshaling
+		alertInterfaces := make([]interface{}, len(activeAlerts))
+		for i, alert := range activeAlerts {
+			alertInterfaces[i] = alert
+		}
+		snapshot.Host.Alerts = alertInterfaces
 	}
 
 	// Cache the snapshot
@@ -133,6 +154,13 @@ func (sc *StateCollector) cloneSnapshot(state *SystemState) *SystemState {
 		procListCopy.Processes[i] = &procCopy
 	}
 
+	// Clone alerts
+	var alertsCopy []interface{}
+	if state.Host.Alerts != nil {
+		alertsCopy = make([]interface{}, len(state.Host.Alerts))
+		copy(alertsCopy, state.Host.Alerts)
+	}
+
 	return &SystemState{
 		SchemaVersion: state.SchemaVersion,
 		Timestamp:     state.Timestamp,
@@ -140,6 +168,7 @@ func (sc *StateCollector) cloneSnapshot(state *SystemState) *SystemState {
 			CPU:        cpuCopy,
 			Memory:     state.Host.Memory,
 			Uptime:     state.Host.Uptime,
+			Alerts:     alertsCopy,
 			UpdatedAt:  state.Host.UpdatedAt,
 		},
 		Processes: *procListCopy,

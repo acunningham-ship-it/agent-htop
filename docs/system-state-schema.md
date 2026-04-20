@@ -227,6 +227,79 @@ This schema is **stable** and can be relied upon by agents and tools:
 
 ---
 
+## Agent Task Information
+
+The **AgentTaskInfo** is returned by the `get_agent_task(agent_id)` MCP tool. It provides detailed task tracking for a specific agent.
+
+```json
+{
+  "agent_id": "8341cbd0-bab0-4fab-98fa-47b512f34b9c",
+  "agent_name": "Backend-Orch",
+  "status": "running",
+  "current_task": {
+    "tool": "Read",
+    "args_summary": "README.md",
+    "started_at": "2026-04-20T20:35:47.821Z",
+    "elapsed_sec": 4,
+    "is_stalled": false,
+    "last_event_at": "2026-04-20T20:35:51.821Z"
+  },
+  "task_history": [
+    {
+      "tool": "Bash",
+      "args_summary": "git status",
+      "started_at": "2026-04-20T20:35:30.000Z",
+      "ended_at": "2026-04-20T20:35:35.000Z",
+      "duration_sec": 5,
+      "is_error": false,
+      "result": "On branch main"
+    }
+  ],
+  "updated_at": "2026-04-20T20:35:51.821Z"
+}
+```
+
+### CurrentTask Structure
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `tool` | string | ✓ | Tool name (Read, Bash, WebFetch, etc) |
+| `args_summary` | string | ✗ | Human-readable argument summary (e.g., "README.md", "npm test") |
+| `started_at` | ISO8601 | ✓ | When the tool invocation started |
+| `elapsed_sec` | int64 | ✓ | Seconds elapsed since task start |
+| `is_stalled` | bool | ✓ | True if tool has run >30s with no completion |
+| `last_event_at` | ISO8601 | ✓ | Timestamp of last log event for this task |
+
+### TaskHistory Structure
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `tool` | string | ✓ | Tool name |
+| `args_summary` | string | ✗ | Argument summary |
+| `started_at` | ISO8601 | ✓ | Task start time |
+| `ended_at` | ISO8601 | ✓ | Task completion time |
+| `duration_sec` | int64 | ✓ | Total duration in seconds |
+| `is_error` | bool | ✓ | Whether the task errored |
+| `result` | string | ✗ | Brief result summary |
+
+### Usage
+
+Supervisor agents call this MCP tool to check if another agent is making progress:
+
+```python
+# Check what CRMOpsManager is doing
+task_info = mcp.call_tool("get_agent_task", {
+  "agent_id": "aa397f6f-agent-id"
+})
+
+if task_info.current_task.is_stalled:
+    print(f"WARNING: {task_info.agent_name} stalled on {task_info.current_task.tool}")
+else:
+    print(f"{task_info.agent_name}: {task_info.current_task.tool} ({task_info.current_task.elapsed_sec}s)")
+```
+
+---
+
 ## See Also
 
 - [Log Schema](log-schema.md) — Paperclip/Claude Code agent run logs
