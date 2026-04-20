@@ -137,6 +137,8 @@ func (s *Server) handleRequest(ctx context.Context, req *JSONRPCRequest) *JSONRP
 		"get_tool_usage":        s.handleGetToolUsage,
 		"list_policies":         s.handleListPolicies,
 		"get_system_alerts":     s.handleGetSystemAlerts,
+		"get_network_metrics":   s.handleGetNetworkMetrics,
+		"get_agent_task":        s.handleGetAgentTask,
 	}
 
 	handler, ok := handlers[req.Method]

@@ -468,3 +468,156 @@ func (s *Server) handleGetSystemAlerts(params json.RawMessage) (interface{}, *JS
 		"alerts": alerts,
 	}, nil
 }
+
+// handleGetNetworkMetrics returns current network metrics.
+func (s *Server) handleGetNetworkMetrics(params json.RawMessage) (interface{}, *JSONRPCErr) {
+	state := s.agg.GetSystemState()
+	if state == nil {
+		return nil, &JSONRPCErr{
+			Code:    -32603,
+			Message: "Internal error",
+			Data:    "system state unavailable",
+		}
+	}
+
+	netMetrics := state.Host.Network
+
+	type InterfaceInfo struct {
+		Name         string  `json:"name"`
+		IP           string  `json:"ip"`
+		State        string  `json:"state"`
+		BytesSent    uint64  `json:"bytes_sent"`
+		BytesRecv    uint64  `json:"bytes_recv"`
+		ThroughputUp float64 `json:"throughput_up_bps"`
+		ThroughputDn float64 `json:"throughput_down_bps"`
+	}
+
+	type WiFiInfo struct {
+		Connected bool   `json:"connected"`
+		SSID      string `json:"ssid"`
+		SignalDBm int    `json:"signal_dBm"`
+	}
+
+	interfaces := make([]*InterfaceInfo, len(netMetrics.Interfaces))
+	for i, iface := range netMetrics.Interfaces {
+		interfaces[i] = &InterfaceInfo{
+			Name:         iface.Name,
+			IP:           iface.IP,
+			State:        iface.State,
+			BytesSent:    iface.BytesSent,
+			BytesRecv:    iface.BytesRecv,
+			ThroughputUp: iface.ThroughputUp,
+			ThroughputDn: iface.ThroughputDn,
+		}
+	}
+
+	var wifi *WiFiInfo
+	if netMetrics.WiFi != nil {
+		wifi = &WiFiInfo{
+			Connected: netMetrics.WiFi.Connected,
+			SSID:      netMetrics.WiFi.SSID,
+			SignalDBm: netMetrics.WiFi.SignalDBm,
+		}
+	}
+
+	return map[string]interface{}{
+		"internet_up": netMetrics.InternetUp,
+		"interfaces":  interfaces,
+		"wifi":        wifi,
+		"updated_at":  netMetrics.UpdatedAt,
+	}, nil
+}
+
+// handleGetAgentTask returns the current task and task history for a session.
+func (s *Server) handleGetAgentTask(params json.RawMessage) (interface{}, *JSONRPCErr) {
+	var req struct {
+		SessionID string `json:"session_id"`
+	}
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, &JSONRPCErr{
+			Code:    -32602,
+			Message: "Invalid params",
+			Data:    err.Error(),
+		}
+	}
+
+	if req.SessionID == "" {
+		return nil, &JSONRPCErr{
+			Code:    -32602,
+			Message: "Invalid params",
+			Data:    "session_id is required",
+		}
+	}
+
+	// Get the session/run
+	run := s.agg.GetSessionByID(req.SessionID)
+	if run == nil {
+		return nil, &JSONRPCErr{
+			Code:    -32603,
+			Message: "Internal error",
+			Data:    "session not found",
+		}
+	}
+
+	// Find the corresponding agent view to get task info
+	var currentTask *parser.CurrentTask
+	var taskHistory []*parser.TaskHistory
+
+	state := s.agg.GetFleetState()
+	if state != nil {
+		for _, agent := range state.Agents {
+			if agent.AgentID == run.AgentID {
+				currentTask = agent.CurrentTask
+				taskHistory = agent.TaskHistory
+				break
+			}
+		}
+	}
+
+	type TaskInfo struct {
+		Tool        string    `json:"tool,omitempty"`
+		ArgsSummary string    `json:"args_summary,omitempty"`
+		ElapsedSec  int64     `json:"elapsed_sec"`
+		IsStalled   bool      `json:"is_stalled"`
+		StartedAt   time.Time `json:"started_at"`
+	}
+
+	type HistoryEntry struct {
+		Tool        string    `json:"tool"`
+		ArgsSummary string    `json:"args_summary"`
+		DurationSec int64     `json:"duration_sec"`
+		IsError     bool      `json:"is_error"`
+		StartedAt   time.Time `json:"started_at"`
+		EndedAt     time.Time `json:"ended_at"`
+	}
+
+	var currentTaskInfo *TaskInfo
+	if currentTask != nil {
+		currentTaskInfo = &TaskInfo{
+			Tool:        currentTask.ToolName,
+			ArgsSummary: currentTask.ArgsSummary,
+			ElapsedSec:  currentTask.ElapsedSec,
+			IsStalled:   currentTask.IsStalled,
+			StartedAt:   currentTask.StartedAt,
+		}
+	}
+
+	history := make([]*HistoryEntry, len(taskHistory))
+	for i, task := range taskHistory {
+		history[i] = &HistoryEntry{
+			Tool:        task.ToolName,
+			ArgsSummary: task.ArgsSummary,
+			DurationSec: task.DurationSec,
+			IsError:     task.IsError,
+			StartedAt:   task.StartedAt,
+			EndedAt:     task.EndedAt,
+		}
+	}
+
+	return map[string]interface{}{
+		"session_id":    req.SessionID,
+		"agent_id":      run.AgentID,
+		"current_task":  currentTaskInfo,
+		"task_history":  history,
+	}, nil
+}
