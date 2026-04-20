@@ -477,6 +477,22 @@ func (a *Aggregator) GetActiveRuntimes() []parser.Runtime {
 	return active
 }
 
+// GetRecentRunsForAgent returns the most recent N runs for a given agent ID.
+func (a *Aggregator) GetRecentRunsForAgent(agentID string, limit int) []*parser.AgentRun {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	var result []*parser.AgentRun
+	// Iterate from the end of runHistory (most recent first)
+	for i := len(a.runHistory) - 1; i >= 0 && len(result) < limit; i-- {
+		if a.runHistory[i].AgentID == agentID {
+			result = append(result, a.runHistory[i])
+		}
+	}
+
+	return result
+}
+
 // handleAnomalies listens to anomaly events and updates agent views.
 func (a *Aggregator) handleAnomalies(ctx context.Context) {
 	defer a.wg.Done()

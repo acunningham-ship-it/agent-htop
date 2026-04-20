@@ -76,6 +76,10 @@ type Model struct {
 	// Help overlay
 	showHelp bool
 
+	// Detail drawer
+	showDetail    bool
+	detailAgentID string
+
 	// Runtime detection results
 	runtimeStatus map[string]bool // runtime name -> detected (true/false)
 }
@@ -390,6 +394,26 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Toggle help overlay
 		m.showHelp = !m.showHelp
 		return m, nil
+	case "enter":
+		// Toggle detail drawer for selected agent
+		if m.showDetail {
+			m.showDetail = false
+			m.detailAgentID = ""
+		} else {
+			filtered := m.filterAgents(m.fleet.Agents)
+			if len(filtered) > 0 && m.selectedRow < len(filtered) {
+				m.showDetail = true
+				m.detailAgentID = filtered[m.selectedRow].AgentID
+			}
+		}
+		return m, nil
+	case "esc":
+		// Close detail drawer if open
+		if m.showDetail {
+			m.showDetail = false
+			m.detailAgentID = ""
+			return m, nil
+		}
 	case "H":
 		// Shift+H to toggle historical view
 		if m.viewMode == ViewModeLive {
@@ -451,7 +475,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.confirmAgent = ""
 			return m, terminateAgent(m.apiClient, agentID)
 		}
-	case "n", "esc":
+	case "n":
 		// Cancel confirmation
 		m.confirmKill = false
 		m.confirmAgent = ""
@@ -529,6 +553,11 @@ func (m *Model) View() string {
 	// Show help overlay if requested
 	if m.showHelp {
 		return m.renderHelpOverlay()
+	}
+
+	// Show detail drawer if requested
+	if m.showDetail {
+		return m.renderDetailDrawer()
 	}
 
 	// Show empty state if no agents detected
@@ -863,6 +892,231 @@ func (m *Model) renderProjectionLine() string {
 	}
 
 	return lipgloss.NewStyle().Foreground(colorCode).Render(line)
+}
+
+// renderHelpOverlay renders the help screen with keybindings and runtime detection status.
+func (m *Model) renderHelpOverlay() string {
+	// Build runtime detection status line
+	runtimeBadge := m.renderRuntimeBadge()
+
+	// Build help content
+	helpText := strings.Join([]string{
+		"",
+		"  KEYBINDINGS",
+		"  ============",
+		"  q             Quit agent-htop",
+		"  ?             Toggle this help screen",
+		"  [↑/k] [↓/j]   Navigate agents",
+		"  [/]           Search agents",
+		"  [f]           Cycle filter (all/errored/running/idle)",
+		"  [s]           Cycle sort (name/cost/heartbeat/spend-rate)",
+		"  [K]           Kill selected agent (Paperclip only)",
+		"  [P]           Pause selected agent (Paperclip only)",
+		"  [R]           Resume selected agent (Paperclip only)",
+		"  [H]           Toggle historical 7-day view",
+		"",
+		"  RUNTIME DETECTION",
+		"  =================",
+		runtimeBadge,
+		"",
+		"  CONFIGURATION",
+		"  ==============",
+		"  Config file:        ~/.config/agent-htop/config.toml",
+		"  Environment vars:   AGENT_HTOP_* (see config file for details)",
+		"",
+		"  Press [?] to close this help screen",
+		"",
+	}, "\n")
+
+	boxedHelp := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("4")).
+		Padding(1).
+		Render(helpText)
+
+	return boxedHelp
+}
+
+// renderEmptyState renders a friendly onboarding message when no agents are detected.
+func (m *Model) renderEmptyState() string {
+	runtimeBadge := m.renderRuntimeBadge()
+
+	emptyText := strings.Join([]string{
+		"",
+		"  No AI agents detected yet 🤔",
+		"",
+		"  RUNTIME DETECTION STATUS",
+		"  ========================",
+		runtimeBadge,
+		"",
+		"  GETTING STARTED",
+		"  ===============",
+		"  1. Claude Code: Sessions are auto-detected from ~/.claude/projects/",
+		"  2. Paperclip:   Start with: agent-htop --company <company-id>",
+		"  3. Codex:       Sessions auto-detected from ~/.codex/",
+		"",
+		"  CONFIGURATION",
+		"  ==============",
+		fmt.Sprintf("  Config file: ~/.config/agent-htop/config.toml"),
+		"  Edit this file to customize refresh rate, API URL, and alerts.",
+		"",
+		"  HELP",
+		"  ====",
+		"  Press [?] for keybindings and configuration help",
+		"  Press [q] to quit",
+		"",
+	}, "\n")
+
+	boxedEmpty := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("3")).
+		Padding(1).
+		Render(emptyText)
+
+	return boxedEmpty
+}
+
+// renderRuntimeBadge renders a line showing which runtimes are detected.
+// Shows green ✓ for detected, gray ✗ for missing.
+func (m *Model) renderRuntimeBadge() string {
+	runtimes := []string{"claude", "codex", "paperclip"}
+	var badges []string
+
+	for _, rt := range runtimes {
+		detected := m.runtimeStatus[rt]
+		var badge string
+		if detected {
+			badge = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("2")).
+				Render(fmt.Sprintf("%s ✓", rt))
+		} else {
+			badge = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("8")).
+				Render(fmt.Sprintf("%s ✗", rt))
+		}
+		badges = append(badges, badge)
+	}
+
+	return "  " + strings.Join(badges, "  ")
+}
+
+// renderDetailDrawer renders a detailed view of the selected agent (right-side drawer, ~40% width).
+func (m *Model) renderDetailDrawer() string {
+	// Find the agent by ID
+	var agent *aggregator.AgentView
+	for _, a := range m.fleet.Agents {
+		if a.AgentID == m.detailAgentID {
+			agent = a
+			break
+		}
+	}
+
+	if agent == nil {
+		return "Agent not found\n"
+	}
+
+	// Get recent runs for this agent (up to 5)
+	runs := m.aggregator.GetRecentRunsForAgent(m.detailAgentID, 5)
+	if len(runs) == 0 {
+		return fmt.Sprintf("No runs found for agent %s\n", agent.AgentName)
+	}
+
+	// Use the most recent run for details
+	run := runs[0]
+
+	// Build the detail content
+	var lines []string
+	lines = append(lines, fmt.Sprintf("Agent: %s", agent.AgentName))
+	lines = append(lines, fmt.Sprintf("Runtime: %s", run.Runtime))
+	lines = append(lines, fmt.Sprintf("Model: %s", run.Model))
+
+	// Session ID or Run ID
+	if run.SessionID != "" {
+		lines = append(lines, fmt.Sprintf("Session ID: %s", truncate(run.SessionID, 40)))
+	}
+	lines = append(lines, fmt.Sprintf("Run ID: %s", truncate(run.RunID, 40)))
+
+	// Working directory
+	if run.WorkDir != "" {
+		lines = append(lines, fmt.Sprintf("Working Dir: %s", truncate(run.WorkDir, 40)))
+	}
+
+	// Timing
+	lines = append(lines, fmt.Sprintf("Start Time: %s", run.StartTime.Format("2006-01-02 15:04:05")))
+	if !run.EndTime.IsZero() {
+		lines = append(lines, fmt.Sprintf("Duration: %dms", run.DurationMS))
+	} else {
+		lines = append(lines, fmt.Sprintf("Elapsed: %s", formatElapsed(run.DurationMS, "running")))
+	}
+
+	// Token counts
+	lines = append(lines, fmt.Sprintf("Input Tokens: %d", run.TotalInputTokens))
+	lines = append(lines, fmt.Sprintf("Output Tokens: %d", run.TotalOutputTokens))
+	lines = append(lines, fmt.Sprintf("Total Cost: $%.4f", run.TotalCostUSD))
+
+	// Status
+	statusColor := m.colorStatus(run.Status, run.IsError)
+	lines = append(lines, fmt.Sprintf("Status: %s", statusColor))
+
+	// Last 5 tool calls
+	if len(run.ToolCalls) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, "Recent Tool Calls:")
+		// Show up to 5 most recent tool calls
+		start := len(run.ToolCalls) - 5
+		if start < 0 {
+			start = 0
+		}
+		for i := start; i < len(run.ToolCalls); i++ {
+			tc := run.ToolCalls[i]
+			timeStr := ""
+			if !tc.StartTime.IsZero() {
+				timeStr = tc.StartTime.Format("15:04:05")
+			}
+			lines = append(lines, fmt.Sprintf("  [%s] %s", timeStr, truncate(tc.Name, 30)))
+		}
+	}
+
+	// Last assistant message (truncated to 500 chars)
+	if run.Result != "" {
+		lines = append(lines, "")
+		lines = append(lines, "Last Message:")
+		msg := run.Result
+		if len(msg) > 500 {
+			msg = msg[:500] + "…"
+		}
+		// Word-wrap the message
+		for _, line := range strings.Split(msg, "\n") {
+			for len(line) > 70 {
+				lines = append(lines, "  "+line[:70])
+				line = line[70:]
+			}
+			if line != "" {
+				lines = append(lines, "  "+line)
+			}
+		}
+	}
+
+	// Join all lines
+	content := strings.Join(lines, "\n")
+
+	// Build the drawer with border
+	drawer := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("6")).
+		Padding(1).
+		Width(80).
+		Render(content)
+
+	footer := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("8")).
+		Render("Press [Enter] or [Esc] to close")
+
+	return lipgloss.JoinVertical(
+		lipgloss.Left,
+		drawer,
+		footer,
+	)
 }
 
 // StateUpdateMsg is a message containing a state update from the aggregator.

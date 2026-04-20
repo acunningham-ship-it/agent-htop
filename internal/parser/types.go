@@ -68,11 +68,33 @@ type ModelMetrics struct {
 
 // ToolCall represents a tool invocation and its result.
 type ToolCall struct {
-	ID      string
-	Name    string
-	Input   map[string]interface{}
-	Result  string
-	IsError bool
+	ID        string
+	Name      string
+	Input     map[string]interface{}
+	Result    string
+	IsError   bool
+	StartTime time.Time // When the tool was invoked
+	EndTime   time.Time // When the result was received
+}
+
+// ToolUsage aggregates metrics for a single tool across a session or fleet.
+type ToolUsage struct {
+	Name        string    // Tool name (e.g., "Read", "Bash", "WebFetch")
+	CallCount   int       // Number of times tool was called
+	ErrorCount  int       // Number of error results
+	SuccessRate float64   // 0-1 indicating success ratio
+	P50DurationMS float64 // Median execution time
+	P95DurationMS float64 // 95th percentile execution time
+	MaxDurationMS float64 // Longest single call
+	TotalCostEst  float64 // Estimated cost contribution (rough heuristic)
+}
+
+// ToolHeatmap represents tool usage statistics for a fleet or session.
+type ToolHeatmap struct {
+	Tools      []*ToolUsage
+	TotalCalls int       // Sum of all tool calls
+	TotalErrors int      // Sum of all errors
+	GeneratedAt time.Time
 }
 
 // LogLine represents the outer NDJSON wrapper.

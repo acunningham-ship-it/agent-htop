@@ -38,6 +38,7 @@ func (p *ClaudeParser) Parse(r io.Reader) (*AgentRun, error) {
 	scanner := bufio.NewScanner(r)
 	firstEventProcessed := false
 	var lastEventTime time.Time
+	toolInvocations := make(map[string]time.Time) // Map tool_use_id to invocation time
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -58,8 +59,10 @@ func (p *ClaudeParser) Parse(r io.Reader) (*AgentRun, error) {
 		}
 
 		// Parse timestamp for timing
+		var eventTime time.Time
 		if ts, ok := event["timestamp"].(string); ok {
 			if t, err := time.Parse(time.RFC3339Nano, ts); err == nil {
+				eventTime = t
 				lastEventTime = t
 				if !firstEventProcessed {
 					run.StartTime = t
@@ -81,9 +84,9 @@ func (p *ClaudeParser) Parse(r io.Reader) (*AgentRun, error) {
 		// Route by event type
 		switch eventType {
 		case "assistant":
-			p.handleAssistant(event, run)
+			p.handleAssistant(event, run, eventTime, toolInvocations)
 		case "user":
-			p.handleUser(event, run)
+			p.handleUser(event, run, eventTime, toolInvocations)
 		case "queue-operation":
 			// Metadata only
 			p.handleQueueOperation(event, run)
@@ -129,7 +132,7 @@ func (p *ClaudeParser) Parse(r io.Reader) (*AgentRun, error) {
 }
 
 // handleAssistant processes assistant events (Claude responses with token usage).
-func (p *ClaudeParser) handleAssistant(event map[string]interface{}, run *AgentRun) {
+func (p *ClaudeParser) handleAssistant(event map[string]interface{}, run *AgentRun, eventTime time.Time, toolInvocations map[string]time.Time) {
 	message, ok := event["message"].(map[string]interface{})
 	if !ok {
 		return
@@ -164,8 +167,9 @@ func (p *ClaudeParser) handleAssistant(event map[string]interface{}, run *AgentR
 					// Extract tool call details
 					if id, ok := blockMap["id"].(string); ok {
 						toolCall := &ToolCall{
-							ID:    id,
-							Input: make(map[string]interface{}),
+							ID:        id,
+							Input:     make(map[string]interface{}),
+							StartTime: eventTime,
 						}
 						if name, ok := blockMap["name"].(string); ok {
 							toolCall.Name = name
@@ -174,6 +178,8 @@ func (p *ClaudeParser) handleAssistant(event map[string]interface{}, run *AgentR
 							toolCall.Input = input
 						}
 						run.ToolCalls = append(run.ToolCalls, toolCall)
+						// Record invocation time for later matching with result
+						toolInvocations[id] = eventTime
 					}
 				}
 			}
@@ -185,7 +191,7 @@ func (p *ClaudeParser) handleAssistant(event map[string]interface{}, run *AgentR
 }
 
 // handleUser processes user events (inputs and tool results).
-func (p *ClaudeParser) handleUser(event map[string]interface{}, run *AgentRun) {
+func (p *ClaudeParser) handleUser(event map[string]interface{}, run *AgentRun, eventTime time.Time, toolInvocations map[string]time.Time) {
 	message, ok := event["message"].(map[string]interface{})
 	if !ok {
 		return
@@ -212,6 +218,7 @@ func (p *ClaudeParser) handleUser(event map[string]interface{}, run *AgentRun) {
 							if toolCall.ID == toolUseID {
 								toolCall.Result = result
 								toolCall.IsError = isError
+								toolCall.EndTime = eventTime
 								break
 							}
 						}
