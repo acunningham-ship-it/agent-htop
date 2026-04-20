@@ -9,6 +9,7 @@ import (
 	"github.com/acunningham-ship-it/agent-htop/internal/action"
 	"github.com/acunningham-ship-it/agent-htop/internal/anomaly"
 	"github.com/acunningham-ship-it/agent-htop/internal/parser"
+	"github.com/acunningham-ship-it/agent-htop/internal/sysinfo"
 )
 
 // handleListSessions lists agent sessions with optional filtering.
@@ -889,5 +890,117 @@ func (s *Server) handleListTasks(params json.RawMessage) (interface{}, *JSONRPCE
 		"queue": *req.QueueName,
 		"status": status,
 		"tasks":  taskList,
+	}, nil
+}
+
+// handleListProcesses lists system processes with optional sorting and limiting.
+func (s *Server) handleListProcesses(params json.RawMessage) (interface{}, *JSONRPCErr) {
+	var req struct {
+		Sort  *string `json:"sort,omitempty"`
+		Limit *int    `json:"limit,omitempty"`
+	}
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &req); err != nil {
+			return nil, &JSONRPCErr{
+				Code:    -32602,
+				Message: "Invalid params",
+				Data:    err.Error(),
+			}
+		}
+	}
+
+	// Get process list
+	procCollector := s.agg.GetProcessCollector()
+	if procCollector == nil {
+		return nil, &JSONRPCErr{
+			Code:    -32603,
+			Message: "Internal error",
+			Data:    "process collector not available",
+		}
+	}
+
+	procList := procCollector.Get()
+	if procList == nil || procList.Processes == nil {
+		return map[string]interface{}{
+			"processes": []*sysinfo.ProcessInfo{},
+			"count":     0,
+			"timestamp": time.Now(),
+		}, nil
+	}
+
+	// Apply sorting if specified
+	if req.Sort != nil && *req.Sort != "" {
+		procList.SortBy(*req.Sort)
+	}
+
+	// Apply limit if specified
+	limit := len(procList.Processes)
+	if req.Limit != nil && *req.Limit > 0 {
+		if *req.Limit < limit {
+			limit = *req.Limit
+		}
+	}
+
+	return map[string]interface{}{
+		"processes": procList.Processes[:limit],
+		"count":     limit,
+		"timestamp": procList.UpdatedAt,
+	}, nil
+}
+
+// handleKillProcess sends a signal to a process by PID.
+func (s *Server) handleKillProcess(params json.RawMessage) (interface{}, *JSONRPCErr) {
+	var req struct {
+		PID    int32  `json:"pid"`
+		Signal string `json:"signal,omitempty"`
+	}
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, &JSONRPCErr{
+			Code:    -32602,
+			Message: "Invalid params",
+			Data:    err.Error(),
+		}
+	}
+
+	if req.PID == 0 {
+		return nil, &JSONRPCErr{
+			Code:    -32602,
+			Message: "Invalid params",
+			Data:    "pid is required and must be non-zero",
+		}
+	}
+
+	// Default to TERM signal
+	signal := "TERM"
+	if req.Signal != "" {
+		signal = req.Signal
+	}
+
+	// Send signal to process
+	if err := sysinfo.KillProcess(req.PID, signal); err != nil {
+		return nil, &JSONRPCErr{
+			Code:    -32603,
+			Message: "Internal error",
+			Data:    fmt.Sprintf("failed to kill process: %v", err),
+		}
+	}
+
+	// Log the action
+	if s.actionLog != nil {
+		entry := &action.ActionLogEntry{
+			Timestamp: time.Now(),
+			AgentID:   s.getCallerAgentID(params),
+			Action:    fmt.Sprintf("kill_process(pid=%d, signal=%s)", req.PID, signal),
+			Details:   fmt.Sprintf("Killed process %d with signal %s", req.PID, signal),
+			Status:    "success",
+		}
+		s.actionLog.Log(entry)
+	}
+
+	return map[string]interface{}{
+		"pid":     req.PID,
+		"signal":  signal,
+		"success": true,
+		"message": fmt.Sprintf("Signal %s sent to process %d", signal, req.PID),
 	}, nil
 }

@@ -843,6 +843,11 @@ func (a *Aggregator) GetAgentTask(agentID string) *AgentTaskInfo {
 	return nil
 }
 
+// GetProcessCollector returns the process collector for reading system process information.
+func (a *Aggregator) GetProcessCollector() *sysinfo.ProcessCollector {
+	return a.processCollector
+}
+
 // AgentTaskInfo is the response structure for the get_agent_task() MCP tool.
 type AgentTaskInfo struct {
 	AgentID     string                `json:"agent_id"`
