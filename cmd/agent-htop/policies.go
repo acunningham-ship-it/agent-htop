@@ -15,7 +15,7 @@ import (
 // Starts listening to policy events in the background.
 func setupPolicies(ctx context.Context, cfg *config.Config, apiClient *api.Client, notifier *notify.Notifier) (*policy.Engine, error) {
 	// Create the policy engine with all handlers
-	engine := policy.NewPolicyEngine(apiClient, notifier)
+	engine := policy.NewPolicyEngine(apiClient, cfg.DiscordWebhook)
 
 	// Load policies from config
 	for _, rawPolicy := range cfg.Policies {
