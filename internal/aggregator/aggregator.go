@@ -477,12 +477,19 @@ func (a *Aggregator) GetFleetState() *FleetState {
 	// Return a copy to avoid external mutation
 	stateCopy := &FleetState{
 		Agents:      make([]*AgentView, len(a.fleetState.Agents)),
+		Processes:   make([]*sysinfo.ProcessInfo, len(a.fleetState.Processes)),
 		UpdatedAt:   a.fleetState.UpdatedAt,
 		HostMetrics: &HostMetrics{},
 	}
 	for i, agent := range a.fleetState.Agents {
 		agentCopy := *agent
 		stateCopy.Agents[i] = &agentCopy
+	}
+
+	// Copy processes
+	for i, proc := range a.fleetState.Processes {
+		procCopy := *proc
+		stateCopy.Processes[i] = &procCopy
 	}
 
 	// Copy host metrics if available
@@ -700,4 +707,28 @@ func (a *Aggregator) GetToolHeatmap(filterAgentID string) *parser.ToolHeatmap {
 	a.mu.RUnlock()
 
 	return ComputeToolHeatmap(runHistory, filterAgentID)
+}
+
+// GetSystemState returns the complete unified system state snapshot.
+// This is used for get_system_state() MCP tool and --full JSON output.
+func (a *Aggregator) GetSystemState() *sysinfo.SystemState {
+	// Get uptime
+	uptime := uint64(0)
+	if u, err := sysinfo.GetUptime(); err == nil {
+		uptime = u
+	}
+
+	now := time.Now()
+
+	return &sysinfo.SystemState{
+		SchemaVersion: 1,
+		Timestamp:     now,
+		Host: sysinfo.HostState{
+			CPU:        *a.cpuCollector.Get(),
+			Memory:     *a.memoryCollector.Get(),
+			Uptime:     sysinfo.UptimeInfo{Seconds: uptime, UpdatedAt: now},
+			UpdatedAt:  now,
+		},
+		Processes: *a.processCollector.Get(),
+	}
 }

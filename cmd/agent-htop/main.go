@@ -432,6 +432,7 @@ func main() {
 	showVersion := flag.Bool("version", false, "Show version and exit")
 	showHelp := flag.Bool("help", false, "Show help and exit")
 	jsonOutput := flag.Bool("json", false, "Output JSON snapshot instead of TUI (requires --once)")
+	fullOutput := flag.Bool("full", false, "Include complete system state (requires --json)")
 	runOnce := flag.Bool("once", false, "Run once and exit instead of launching interactive TUI")
 
 	// Custom usage
@@ -553,6 +554,12 @@ Examples:
 		os.Exit(1)
 	}
 
+	// Validate --full requires --json
+	if *fullOutput && !*jsonOutput {
+		fmt.Fprintf(os.Stderr, "Error: --full requires --json flag\n")
+		os.Exit(1)
+	}
+
 	// Setup logging if verbose
 	if *verbose {
 		log.SetOutput(os.Stderr)
@@ -658,28 +665,34 @@ Examples:
 		for {
 			select {
 			case <-ticker.C:
-				state := agg.GetFleetState()
-				if len(state.Agents) > 0 || time.Since(startTime) > timeout {
-					if *jsonOutput {
-						// Output JSON snapshot
-						data, err := json.MarshalIndent(state, "", "  ")
-						if err != nil {
-							fmt.Fprintf(os.Stderr, "Error marshaling JSON: %v\n", err)
-							agg.Stop()
-							w.Stop()
-							os.Exit(1)
-						}
-						fmt.Println(string(data))
+				if *jsonOutput {
+					// Output JSON snapshot
+					var output interface{}
+					if *fullOutput {
+						// Full output: complete system state
+						output = agg.GetSystemState()
+					} else {
+						// Standard output: fleet state
+						output = agg.GetFleetState()
+					}
 
-						// Exit code 0 if agents found, 1 if no agents
+					data, err := json.MarshalIndent(output, "", "  ")
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "Error marshaling JSON: %v\n", err)
 						agg.Stop()
 						w.Stop()
-						if len(state.Agents) == 0 {
-							os.Exit(1)
-						}
-						os.Exit(0)
-					} else {
-						// --once without --json: just wait for load then exit
+						os.Exit(1)
+					}
+					fmt.Println(string(data))
+
+					// Exit code 0 always for JSON output (data may be empty but valid)
+					agg.Stop()
+					w.Stop()
+					os.Exit(0)
+				} else {
+					// --once without --json: just wait for load then exit
+					state := agg.GetFleetState()
+					if len(state.Agents) > 0 || time.Since(startTime) > timeout {
 						agg.Stop()
 						w.Stop()
 						os.Exit(0)
