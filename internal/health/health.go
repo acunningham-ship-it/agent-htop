@@ -136,7 +136,7 @@ func NewDiskUsageRule() *DiskUsageRule {
 }
 
 func (r *DiskUsageRule) Name() string {
-	return "disk_usage"
+	return "disk_full"
 }
 
 func (r *DiskUsageRule) Evaluate(metrics SystemMetrics) *Alert {
@@ -188,23 +188,23 @@ func (r *GPUThermalRule) Evaluate(metrics SystemMetrics) *Alert {
 	now := time.Now()
 	tempC := metrics.GetGPUTempC()
 
-	// Critical: > 85°C
-	if tempC > 85 {
+	// Critical: > 95°C
+	if tempC > 95 {
 		return &Alert{
 			Rule:      r.Name(),
 			Severity:  "critical",
-			Message:   fmt.Sprintf("GPU overheating: %.1f°C (threshold: 85°C)", tempC),
+			Message:   fmt.Sprintf("GPU critical: %.1f°C (threshold: 95°C)", tempC),
 			Since:     now,
 			UpdatedAt: now,
 		}
 	}
 
-	// Medium: > 75°C
-	if tempC > 75 {
+	// High: > 85°C
+	if tempC > 85 {
 		return &Alert{
 			Rule:      r.Name(),
-			Severity:  "medium",
-			Message:   fmt.Sprintf("GPU running hot: %.1f°C", tempC),
+			Severity:  "high",
+			Message:   fmt.Sprintf("GPU hot: %.1f°C (threshold: 85°C)", tempC),
 			Since:     now,
 			UpdatedAt: now,
 		}

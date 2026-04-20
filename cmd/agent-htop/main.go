@@ -457,7 +457,7 @@ func runDaemon(companyID, configPath, apiURL string, refreshMs int, runtimesStr,
 	}
 
 	// Start Discord notifier
-	discordNotifier.Start(ctx, agg.GetDetector())
+	discordNotifier.StartWithAggregator(ctx, agg, agg.GetDetector())
 
 	log.Printf("Daemon started successfully. Monitoring %d runtimes", len(runtimes))
 
@@ -977,7 +977,7 @@ Examples:
 	}
 
 	// Start Discord notifier
-	discordNotifier.Start(ctx, agg.GetDetector())
+	discordNotifier.StartWithAggregator(ctx, agg, agg.GetDetector())
 
 	// Setup signal handling
 	sigChan := make(chan os.Signal, 1)
