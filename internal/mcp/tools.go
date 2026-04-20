@@ -1149,3 +1149,150 @@ func (s *Server) handleTestConnectivity(params json.RawMessage) (interface{}, *J
 		"timestamp": time.Now(),
 	}, nil
 }
+
+// handleGetHostMetrics returns the current system metrics (CPU, memory, disk, GPU, network, uptime).
+func (s *Server) handleGetHostMetrics(params json.RawMessage) (interface{}, *JSONRPCErr) {
+	state := s.agg.GetSystemState()
+	if state == nil {
+		return nil, &JSONRPCErr{
+			Code:    -32603,
+			Message: "Internal error",
+			Data:    "system state unavailable",
+		}
+	}
+
+	// Return the complete system state for agent consumption
+	return map[string]interface{}{
+		"schemaVersion": state.SchemaVersion,
+		"timestamp":     state.Timestamp,
+		"host": map[string]interface{}{
+			"cpu": map[string]interface{}{
+				"percentPerCore": state.Host.CPU.PercentPerCore,
+				"averagePercent": state.Host.CPU.AveragePercent,
+				"load1Min":       state.Host.CPU.Load1Min,
+				"load5Min":       state.Host.CPU.Load5Min,
+				"load15Min":      state.Host.CPU.Load15Min,
+				"logicalCores":   state.Host.CPU.LogicalCores,
+				"physicalCores":  state.Host.CPU.PhysicalCores,
+				"updatedAt":      state.Host.CPU.UpdatedAt,
+			},
+			"memory": map[string]interface{}{
+				"totalMB":         state.Host.Memory.TotalMB,
+				"usedMB":          state.Host.Memory.UsedMB,
+				"freeMB":          state.Host.Memory.FreeMB,
+				"availableMB":     state.Host.Memory.AvailableMB,
+				"usedPercent":     state.Host.Memory.UsedPercent,
+				"swapTotalMB":     state.Host.Memory.SwapTotalMB,
+				"swapUsedMB":      state.Host.Memory.SwapUsedMB,
+				"swapFreeMB":      state.Host.Memory.SwapFreeMB,
+				"swapUsedPercent": state.Host.Memory.SwapUsedPercent,
+				"cacheMB":         state.Host.Memory.CacheMB,
+				"updatedAt":       state.Host.Memory.UpdatedAt,
+			},
+			"disk": func() map[string]interface{} {
+				if state.Host.Disks == nil {
+					return map[string]interface{}{
+						"mounts":  []interface{}{},
+						"ioStats": []interface{}{},
+						"updatedAt": time.Time{},
+					}
+				}
+				mounts := make([]map[string]interface{}, len(state.Host.Disks.Mounts))
+				for i, mount := range state.Host.Disks.Mounts {
+					mounts[i] = map[string]interface{}{
+						"device":      mount.Device,
+						"mountPoint":  mount.MountPoint,
+						"fsType":      mount.FSType,
+						"totalBytes":  mount.TotalBytes,
+						"usedBytes":   mount.UsedBytes,
+						"freeBytes":   mount.FreeBytes,
+						"usedPercent": mount.UsedPercent,
+						"updatedAt":   mount.UpdatedAt,
+					}
+				}
+				ioStats := make([]map[string]interface{}, len(state.Host.Disks.IOStats))
+				for i, io := range state.Host.Disks.IOStats {
+					ioStats[i] = map[string]interface{}{
+						"device":           io.Device,
+						"readsPerSec":      io.ReadsPerSec,
+						"writesPerSec":     io.WritesPerSec,
+						"readBytesPerSec":  io.ReadBytesPerSec,
+						"writeBytesPerSec": io.WriteBytesPerSec,
+						"updatedAt":        io.UpdatedAt,
+					}
+				}
+				return map[string]interface{}{
+					"mounts":    mounts,
+					"ioStats":   ioStats,
+					"updatedAt": state.Host.Disks.UpdatedAt,
+				}
+			}(),
+			"gpu": map[string]interface{}{
+				"available": state.Host.GPU.Available,
+				"gpus": func() []map[string]interface{} {
+					result := make([]map[string]interface{}, len(state.Host.GPU.GPUs))
+					for i, gpu := range state.Host.GPU.GPUs {
+						result[i] = map[string]interface{}{
+							"name":       gpu.Name,
+							"index":      gpu.Index,
+							"utilPct":    gpu.UtilPct,
+							"tempC":      gpu.TempC,
+							"vramUsedMB": gpu.VRAMUsed,
+							"vramTotalMB": gpu.VRAMTotal,
+							"powerDrawW": gpu.PowerDraw,
+						}
+					}
+					return result
+				}(),
+				"updatedAt": state.Host.GPU.UpdatedAt,
+			},
+			"network": map[string]interface{}{
+				"internetUp": state.Host.Network.InternetUp,
+				"interfaces": func() []map[string]interface{} {
+					result := make([]map[string]interface{}, len(state.Host.Network.Interfaces))
+					for i, iface := range state.Host.Network.Interfaces {
+						result[i] = map[string]interface{}{
+							"name":         iface.Name,
+							"ip":           iface.IP,
+							"state":        iface.State,
+							"bytesSent":    iface.BytesSent,
+							"bytesRecv":    iface.BytesRecv,
+							"throughputUp": iface.ThroughputUp,
+							"throughputDn": iface.ThroughputDn,
+						}
+					}
+					return result
+				}(),
+				"wifi": func() map[string]interface{} {
+					if state.Host.Network.WiFi == nil {
+						return nil
+					}
+					return map[string]interface{}{
+						"connected":  state.Host.Network.WiFi.Connected,
+						"ssid":       state.Host.Network.WiFi.SSID,
+						"signalDBm":  state.Host.Network.WiFi.SignalDBm,
+					}
+				}(),
+				"updatedAt": state.Host.Network.UpdatedAt,
+			},
+			"uptime": map[string]interface{}{
+				"seconds":   state.Host.Uptime.Seconds,
+				"updatedAt": state.Host.Uptime.UpdatedAt,
+			},
+			"alerts": func() []map[string]interface{} {
+				result := make([]map[string]interface{}, len(state.Host.Alerts))
+				for i, alert := range state.Host.Alerts {
+					result[i] = map[string]interface{}{
+						"rule":      alert.Rule,
+						"severity":  alert.Severity,
+						"message":   alert.Message,
+						"since":     alert.Since,
+						"updatedAt": alert.UpdatedAt,
+					}
+				}
+				return result
+			}(),
+			"updatedAt": state.Host.UpdatedAt,
+		},
+	}, nil
+}

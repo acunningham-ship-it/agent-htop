@@ -20,7 +20,7 @@ type SystemState struct {
 type HostState struct {
 	CPU       CPUMetrics      `json:"cpu"`
 	Memory    MemoryMetrics   `json:"memory"`
-	Disk      DiskMetrics     `json:"disk"`
+	Disks     *DiskList       `json:"disks"`
 	GPU       GPUMetrics      `json:"gpu"`
 	Network   NetworkMetrics  `json:"network"`
 	Uptime    UptimeInfo      `json:"uptime"`
@@ -64,11 +64,29 @@ func (s *SystemState) GetMemSwapTotalMB() uint64 {
 }
 
 func (s *SystemState) GetDiskUsedPercent() float64 {
-	return s.Host.Disk.UsedPercent
+	// Return the highest disk usage percentage across all mounts
+	if s.Host.Disks == nil || len(s.Host.Disks.Mounts) == 0 {
+		return 0
+	}
+	maxUsed := 0.0
+	for _, mount := range s.Host.Disks.Mounts {
+		if mount.UsedPercent > maxUsed {
+			maxUsed = mount.UsedPercent
+		}
+	}
+	return maxUsed
 }
 
 func (s *SystemState) GetDiskFreeGB() uint64 {
-	return s.Host.Disk.FreeGB
+	// Return the total free space across all mounts
+	if s.Host.Disks == nil || len(s.Host.Disks.Mounts) == 0 {
+		return 0
+	}
+	var total uint64
+	for _, mount := range s.Host.Disks.Mounts {
+		total += mount.FreeBytes / (1024 * 1024 * 1024)
+	}
+	return total
 }
 
 func (s *SystemState) GetGPUTempC() float64 {
@@ -106,7 +124,7 @@ func NewStateCollector(interval time.Duration, cacheTTL time.Duration) *StateCol
 	return &StateCollector{
 		cpuCollector:     NewCPUCollector(interval),
 		memCollector:     NewMemoryCollector(interval),
-		diskCollector:    NewDiskCollector(interval),
+		diskCollector:    NewDiskCollector(interval, false), // allMounts=false to skip pseudo-filesystems
 		gpuCollector:     NewGPUCollector(interval),
 		networkCollector: NewNetworkCollector(interval),
 		procCollector:    NewProcessCollector(interval),
@@ -172,7 +190,7 @@ func (sc *StateCollector) GetSnapshot() *SystemState {
 	hostState := HostState{
 		CPU:       *sc.cpuCollector.Get(),
 		Memory:    *sc.memCollector.Get(),
-		Disk:      *sc.diskCollector.Get(),
+		Disks:     sc.diskCollector.Get(),
 		GPU:       *sc.gpuCollector.Get(),
 		Network:   *sc.networkCollector.Get(),
 		Uptime:    UptimeInfo{Seconds: uptime, UpdatedAt: now},
@@ -240,13 +258,33 @@ func (sc *StateCollector) cloneSnapshot(state *SystemState) *SystemState {
 		gpuCopy.GPUs = gpusCopy
 	}
 
+	// Clone disk metrics
+	var disksCopy *DiskList
+	if state.Host.Disks != nil {
+		mounts := make([]*DiskMetrics, len(state.Host.Disks.Mounts))
+		for i, m := range state.Host.Disks.Mounts {
+			mountCopy := *m
+			mounts[i] = &mountCopy
+		}
+		ioStats := make([]*DiskIOMetrics, len(state.Host.Disks.IOStats))
+		for i, io := range state.Host.Disks.IOStats {
+			ioCopy := *io
+			ioStats[i] = &ioCopy
+		}
+		disksCopy = &DiskList{
+			Mounts:    mounts,
+			IOStats:   ioStats,
+			UpdatedAt: state.Host.Disks.UpdatedAt,
+		}
+	}
+
 	return &SystemState{
 		SchemaVersion: state.SchemaVersion,
 		Timestamp:     state.Timestamp,
 		Host: HostState{
 			CPU:        cpuCopy,
 			Memory:     state.Host.Memory,
-			Disk:       state.Host.Disk,
+			Disks:      disksCopy,
 			GPU:        gpuCopy,
 			Network:    state.Host.Network,
 			Uptime:     state.Host.Uptime,

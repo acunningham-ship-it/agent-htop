@@ -109,7 +109,7 @@ func NewAggregatorWithRuntimes(companyID, logDir string, agentNamer AgentNamer, 
 		runtimes:         runtimeMap,
 		cpuCollector:     sysinfo.NewCPUCollector(time.Second),
 		memoryCollector:  sysinfo.NewMemoryCollector(time.Second),
-		diskCollector:    sysinfo.NewDiskCollector(time.Second),
+		diskCollector:    sysinfo.NewDiskCollector(time.Second, false), // allMounts=false to skip pseudo-filesystems
 		gpuCollector:     sysinfo.NewGPUCollector(time.Second),
 		networkCollector: sysinfo.NewNetworkCollector(time.Second),
 		processCollector: sysinfo.NewProcessCollector(time.Second),
@@ -888,7 +888,7 @@ func (a *Aggregator) GetSystemState() *sysinfo.SystemState {
 		Host: sysinfo.HostState{
 			CPU:        *a.cpuCollector.Get(),
 			Memory:     *a.memoryCollector.Get(),
-			Disk:       *a.diskCollector.Get(),
+			Disks:      a.diskCollector.Get(),
 			GPU:        *a.gpuCollector.Get(),
 			Network:    *a.networkCollector.Get(),
 			Alerts:     a.alertEvaluator.GetActiveAlerts(),
@@ -1078,7 +1078,7 @@ func (a *Aggregator) GetActiveAlerts() []*health.Alert {
 type systemMetricsWrapper struct {
 	cpu     *sysinfo.CPUMetrics
 	mem     *sysinfo.MemoryMetrics
-	disk    *sysinfo.DiskMetrics
+	disk    *sysinfo.DiskList
 	gpu     *sysinfo.GPUMetrics
 	network *sysinfo.NetworkMetrics
 }
@@ -1133,17 +1133,29 @@ func (w *systemMetricsWrapper) GetMemSwapTotalMB() uint64 {
 }
 
 func (w *systemMetricsWrapper) GetDiskUsedPercent() float64 {
-	if w.disk == nil {
+	if w.disk == nil || len(w.disk.Mounts) == 0 {
 		return 0
 	}
-	return w.disk.UsedPercent
+	// Return the highest disk usage percentage across all mounts
+	maxUsed := 0.0
+	for _, mount := range w.disk.Mounts {
+		if mount.UsedPercent > maxUsed {
+			maxUsed = mount.UsedPercent
+		}
+	}
+	return maxUsed
 }
 
 func (w *systemMetricsWrapper) GetDiskFreeGB() uint64 {
-	if w.disk == nil {
+	if w.disk == nil || len(w.disk.Mounts) == 0 {
 		return 0
 	}
-	return w.disk.FreeGB
+	// Return the total free space across all mounts
+	var total uint64
+	for _, mount := range w.disk.Mounts {
+		total += mount.FreeBytes / (1024 * 1024 * 1024)
+	}
+	return total
 }
 
 func (w *systemMetricsWrapper) GetGPUTempC() float64 {

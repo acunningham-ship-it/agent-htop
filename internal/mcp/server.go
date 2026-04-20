@@ -141,6 +141,7 @@ func (s *Server) handleRequest(ctx context.Context, req *JSONRPCRequest) *JSONRP
 		"list_policies":         s.handleListPolicies,
 		"get_system_alerts":     s.handleGetSystemAlerts,
 		"get_network_metrics":   s.handleGetNetworkMetrics,
+		"get_host_metrics":      s.handleGetHostMetrics,
 		"get_gpu_metrics":       s.handleGetGPUMetrics,
 		"get_agent_task":        s.handleGetAgentTask,
 		"enqueue_task":          s.handleEnqueueTask,
