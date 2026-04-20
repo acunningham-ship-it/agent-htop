@@ -51,6 +51,7 @@ type Aggregator struct {
 	fleetState      *FleetState
 	costTrackers    map[string]*AgentCostTracker // Per-agent cost tracking
 	dailyAverages   map[string][]float64         // Per-agent daily cost history
+	runHistory      []*parser.AgentRun           // Complete history of all runs for historical view
 	stateCh         chan *FleetState
 
 	stopCh chan struct{}
@@ -79,6 +80,7 @@ func NewAggregatorWithRuntimes(companyID, logDir string, agentNamer AgentNamer, 
 		fleetState:    &FleetState{Agents: make([]*AgentView, 0)},
 		costTrackers:  make(map[string]*AgentCostTracker),
 		dailyAverages: make(map[string][]float64),
+		runHistory:    make([]*parser.AgentRun, 0),
 		stateCh:       make(chan *FleetState, 10),
 		stopCh:        make(chan struct{}),
 	}
@@ -295,6 +297,9 @@ func (a *Aggregator) parseAndUpdateClaudeLog(ctx context.Context, logPath string
 func (a *Aggregator) updateFleetState(ctx context.Context, run *parser.AgentRun) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
+	// Add to run history for historical view
+	a.runHistory = append(a.runHistory, run)
 
 	now := time.Now()
 
@@ -525,4 +530,88 @@ func (a *Aggregator) Stop() {
 	close(a.stopCh)
 	a.detector.Stop()
 	a.wg.Wait()
+}
+
+// GetHistoricalView returns the 7-day historical view of aggregated metrics.
+func (a *Aggregator) GetHistoricalView() *HistoricalView {
+	a.mu.RLock()
+	runHistory := make([]*parser.AgentRun, len(a.runHistory))
+	copy(runHistory, a.runHistory)
+	a.mu.RUnlock()
+
+	now := time.Now()
+	view := NewHistoricalView()
+
+	// Map to collect runs by day
+	dayMap := make(map[time.Time]*DayBucket)
+
+	// Bucket all runs by day
+	for _, run := range runHistory {
+		dayKey := dayBucketKey(run.StartTime)
+
+		if _, exists := dayMap[dayKey]; !exists {
+			dayMap[dayKey] = &DayBucket{
+				Date:           dayKey,
+				SessionCount:   0,
+				TotalCostUSD:   0,
+				TotalInputTokens: 0,
+				TotalOutputTokens: 0,
+				TopModel:       "-",
+				ErrorCount:     0,
+				ModelBreakdown: make(map[string]int),
+			}
+		}
+
+		bucket := dayMap[dayKey]
+		bucket.SessionCount++
+		bucket.TotalCostUSD += run.TotalCostUSD
+		bucket.TotalInputTokens += int64(run.TotalInputTokens)
+		bucket.TotalOutputTokens += int64(run.TotalOutputTokens)
+
+		if run.IsError {
+			bucket.ErrorCount++
+		}
+
+		// Track model usage
+		if run.Model != "" {
+			bucket.ModelBreakdown[run.Model]++
+		}
+	}
+
+	// Calculate top model per day
+	for _, bucket := range dayMap {
+		if len(bucket.ModelBreakdown) > 0 {
+			var topModel string
+			var maxCount int
+			for model, count := range bucket.ModelBreakdown {
+				if count > maxCount {
+					maxCount = count
+					topModel = model
+				}
+			}
+			bucket.TopModel = topModel
+		}
+	}
+
+	// Convert map to sorted slice (oldest first)
+	var days []*DayBucket
+	for _, bucket := range dayMap {
+		days = append(days, bucket)
+	}
+
+	sort.Slice(days, func(i, j int) bool {
+		return days[i].Date.Before(days[j].Date)
+	})
+
+	for _, day := range days {
+		// Only include days within last 7 days
+		if daysBetween(day.Date, now) <= 6 {
+			view.AddDay(day)
+		}
+	}
+
+	// Pad to 7 days (fill empty days if needed)
+	view.PadToSevenDays(now)
+	view.GeneratedAt = time.Now()
+	return view
 }

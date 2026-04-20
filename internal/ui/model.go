@@ -14,6 +14,14 @@ import (
 	"github.com/acunningham-ship-it/agent-htop/internal/api"
 )
 
+// ViewMode represents the current view state
+type ViewMode string
+
+const (
+	ViewModeLive       ViewMode = "live"
+	ViewModeHistorical ViewMode = "historical"
+)
+
 // FilterMode represents the current filter state
 type FilterMode string
 
@@ -60,6 +68,16 @@ type Model struct {
 	searchMode   bool
 	filterMode   FilterMode
 	sortMode     SortMode
+
+	// View mode (live vs historical)
+	viewMode   ViewMode
+	historical *aggregator.HistoricalView
+
+	// Help overlay
+	showHelp bool
+
+	// Runtime detection results
+	runtimeStatus map[string]bool // runtime name -> detected (true/false)
 }
 
 // New creates a new TUI model.
@@ -71,17 +89,27 @@ func New(agg *aggregator.Aggregator, client *api.Client, companyID string) *Mode
 		runtimeStrs[i] = string(rt)
 	}
 
+	// Build runtime status (what was detected)
+	runtimeStatus := make(map[string]bool)
+	for _, rt := range activeRuntimes {
+		runtimeStatus[string(rt)] = true
+	}
+
 	m := &Model{
-		aggregator:  agg,
-		apiClient:   client,
-		fleet:       &aggregator.FleetState{},
-		actionFlash: make(map[string]time.Time),
-		filterMode:  FilterAll,
-		sortMode:    SortName,
-		searchQuery: "",
-		searchMode:  false,
-		companyID:   companyID,
-		runtimes:    runtimeStrs,
+		aggregator:    agg,
+		apiClient:     client,
+		fleet:         &aggregator.FleetState{},
+		actionFlash:   make(map[string]time.Time),
+		filterMode:    FilterAll,
+		sortMode:      SortName,
+		searchQuery:   "",
+		searchMode:    false,
+		viewMode:      ViewModeLive,
+		historical:    nil,
+		showHelp:      false,
+		companyID:     companyID,
+		runtimes:      runtimeStrs,
+		runtimeStatus: runtimeStatus,
 	}
 	state := agg.GetFleetState()
 	if state != nil {
@@ -358,6 +386,22 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "q", "ctrl+c":
 		m.quitting = true
 		return m, tea.Quit
+	case "?":
+		// Toggle help overlay
+		m.showHelp = !m.showHelp
+		return m, nil
+	case "H":
+		// Shift+H to toggle historical view
+		if m.viewMode == ViewModeLive {
+			m.viewMode = ViewModeHistorical
+			// Load historical data if not already loaded
+			if m.historical == nil {
+				m.historical = m.aggregator.GetHistoricalView()
+			}
+		} else {
+			m.viewMode = ViewModeLive
+		}
+		return m, nil
 	case "/":
 		// Enter search mode
 		m.searchMode = true
@@ -485,7 +529,9 @@ func (m *Model) View() string {
 	header := m.renderHeader()
 
 	var tableView string
-	if m.searchMode {
+	if m.viewMode == ViewModeHistorical {
+		tableView = m.renderHistoricalView()
+	} else if m.searchMode {
 		tableView = m.renderSearchMode()
 	} else {
 		tableView = m.table.View()
@@ -598,6 +644,106 @@ func (m *Model) renderSearchMode() string {
 	)
 }
 
+// renderHistoricalView renders the 7-day historical view with bar chart.
+func (m *Model) renderHistoricalView() string {
+	if m.historical == nil {
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("Loading historical data...\n")
+	}
+
+	// Refresh historical data on every render (keep it current)
+	m.historical = m.aggregator.GetHistoricalView()
+
+	// Build table header
+	header := "Last 7 Days Historical View\n"
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
+	styledHeader := headerStyle.Render(header)
+
+	// Find max cost for scaling
+	maxCost := m.historical.MaxCostForChart()
+	if maxCost == 0 {
+		maxCost = 1 // Avoid division by zero
+	}
+
+	// Render each day as a row with bar chart
+	var lines []string
+	for i, day := range m.historical.Days {
+		daysAgo := len(m.historical.Days) - i - 1
+		dateStr := day.Date.Format("Mon 01/02")
+		if daysAgo == 0 {
+			dateStr = "Today"
+		} else if daysAgo == 1 {
+			dateStr = "Yesterday"
+		}
+
+		// Build bar (using block characters)
+		barWidth := 30
+		filledWidth := int((day.TotalCostUSD / maxCost) * float64(barWidth))
+		if filledWidth > barWidth {
+			filledWidth = barWidth
+		}
+		if filledWidth < 1 && day.TotalCostUSD > 0 {
+			filledWidth = 1
+		}
+
+		bar := strings.Repeat("█", filledWidth) + strings.Repeat("░", barWidth-filledWidth)
+
+		// Determine color based on cost
+		var barColor lipgloss.Color
+		avgCost := maxCost / 7
+		if day.TotalCostUSD <= avgCost {
+			barColor = lipgloss.Color("2") // green
+		} else if day.TotalCostUSD <= avgCost*2 {
+			barColor = lipgloss.Color("3") // yellow
+		} else {
+			barColor = lipgloss.Color("1") // red
+		}
+
+		styledBar := lipgloss.NewStyle().Foreground(barColor).Render(bar)
+
+		// Summary stats
+		line := fmt.Sprintf(
+			"  %s  %s  $%7.2f  %3d sessions  %s  errors:%d",
+			dateStr,
+			styledBar,
+			day.TotalCostUSD,
+			day.SessionCount,
+			day.TopModel,
+			day.ErrorCount,
+		)
+		lines = append(lines, line)
+	}
+
+	// Add summary footer
+	totalCost := 0.0
+	totalSessions := 0
+	totalErrors := 0
+	for _, day := range m.historical.Days {
+		totalCost += day.TotalCostUSD
+		totalSessions += day.SessionCount
+		totalErrors += day.ErrorCount
+	}
+	avgDailyCost := totalCost / 7
+
+	summaryLine := fmt.Sprintf(
+		"\n  7-day Total: $%.2f  Avg/day: $%.2f  Sessions: %d  Errors: %d",
+		totalCost, avgDailyCost, totalSessions, totalErrors,
+	)
+	summaryStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
+	styledSummary := summaryStyle.Render(summaryLine)
+
+	// Add help text
+	helpText := "\n  [H]back to live view"
+	styledHelp := lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(helpText)
+
+	allLines := append(lines, styledSummary, styledHelp)
+
+	return lipgloss.JoinVertical(
+		lipgloss.Left,
+		styledHeader,
+		strings.Join(allLines, "\n"),
+	)
+}
+
 // renderHeader renders the header with fleet summary.
 func (m *Model) renderHeader() string {
 	running := 0
@@ -630,7 +776,7 @@ func (m *Model) renderHeader() string {
 	// Main header line: agent-htop v0.2.0 | <runtime badges> | N sessions | updated Xs ago
 	// Note: [K]ill, [P]ause, [R]esume are only available for Paperclip agents
 	header := fmt.Sprintf(
-		"agent-htop v0.2.0 | %s | %d sessions | updated %s ago   %s  %s%s  [q]uit [K]ill [P]ause [R]esume [/]search\n",
+		"agent-htop v0.2.0 | %s | %d sessions | updated %s ago   %s  %s%s  [q]uit [K]ill [P]ause [R]esume [H]istory [/]search\n",
 		runtimeStr,
 		len(m.fleet.Agents),
 		formatSinceUpdate(m.fleet.UpdatedAt),
