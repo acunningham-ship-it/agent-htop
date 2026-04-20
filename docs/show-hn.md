@@ -1,8 +1,8 @@
 # Show HN: agent-htop — live terminal dashboard for Claude Code sessions
 
-I was running several Claude Code agents overnight on a side project. Woke up to a larger bill than expected and no quick way to see which session caused it. The logs are buried in `~/.claude/projects/`, costs are scattered across JSON, and there's no live view.
+I was running several Claude Code sessions overnight on a side project. Woke up to a larger bill than expected and no quick way to see which session caused it. The logs are scattered across `~/.claude/projects/`, costs are buried in JSON, and there's no live view of what's actually running.
 
-So I built agent-htop.
+So I built agent-htop — a single-command terminal dashboard that shows your AI sessions in real-time, updated continuously as they run.
 
 ```
 agent-htop  v0.2.0   sessions: 3   running: 2   cost today: $0.42   [q]uit
@@ -46,8 +46,3 @@ Built it as a single Go binary using bubbletea for the TUI. Works on Linux and m
 - Homebrew: `brew install acunningham-ship-it/tap/agent-htop`
 
 I'm 17 and this is a tool I actually use daily. Happy to answer questions or take feedback.
-
----
-
-**Cross-post targets:** r/golang, r/commandline, r/ClaudeAI  
-**Best timing:** Tuesday 8–10am US-East

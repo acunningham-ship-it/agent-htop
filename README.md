@@ -1,6 +1,6 @@
 # agent-htop
 
-Live terminal dashboard for your AI coding sessions. Works with Claude Code today.
+Real-time terminal dashboard for Claude Code sessions, Paperclip agent fleets, and more. Monitor costs, tokens, and agent status without leaving the terminal.
 
 ```
 agent-htop  v0.2.0   sessions: 3   running: 2   cost today: $0.42   [q]uit
@@ -14,11 +14,13 @@ agent-htop  v0.2.0   sessions: 3   running: 2   cost today: $0.42   [q]uit
 
 ## Install
 
+**From source:**
+
 ```bash
 go install github.com/acunningham-ship-it/agent-htop/cmd/agent-htop@latest
 ```
 
-Or via Homebrew:
+**Via Homebrew:**
 
 ```bash
 brew install acunningham-ship-it/tap/agent-htop
@@ -28,12 +30,21 @@ Requires Go 1.21+.
 
 ## Quick start
 
+**For Claude Code sessions (no setup needed):**
+
 ```bash
-# Run — auto-discovers your Claude Code sessions
 agent-htop
 ```
 
-That's it. agent-htop finds your `~/.claude/projects/**/*.jsonl` sessions automatically.
+Auto-discovers your sessions from `~/.claude/projects/**/*.jsonl`.
+
+**For Paperclip agent fleets:**
+
+```bash
+agent-htop --company <company-id>
+```
+
+Displays your local Claude Code sessions alongside Paperclip agents with kill/pause control.
 
 ## Supported runtimes
 
@@ -60,15 +71,19 @@ That's it. agent-htop finds your `~/.claude/projects/**/*.jsonl` sessions automa
 
 Kill/pause/resume only work for Paperclip agents. Claude Code sessions are read-only.
 
-## Advanced: Paperclip fleet monitoring
+## Paperclip fleet monitoring
 
-If you run a [Paperclip](https://paperclipai.com) agent fleet, pass your company ID to see all agents alongside your Claude Code sessions:
+If you run a [Paperclip](https://paperclipai.com) agent fleet, agent-htop displays all agents in the same view with kill/pause/resume control:
 
 ```bash
 agent-htop --company 920a3930-f429-45cd-8fb8-774fa81cbd96
 ```
 
-With Paperclip you also get kill/pause control (`K` / `P` / `R` keys) and agent-level cost tracking.
+**Paperclip features:**
+- Kill/pause/resume agents with `K` / `P` / `R` keys
+- Agent-level cost tracking and spend anomaly detection
+- Error streak monitoring
+- Real-time heartbeat updates from the Paperclip API
 
 ### Discord webhook alerts
 
@@ -131,3 +146,23 @@ cd agent-htop
 make build
 ./agent-htop --version
 ```
+
+## Troubleshooting
+
+**"failed to parse log: scanner error: bufio.Scanner: token too long"**
+
+This warning occurs when a single Paperclip log line exceeds 64KB (e.g., very large tool responses). The agent is still tracked, but some details may be missing. This is a known limitation being fixed in [HTO-40](https://github.com/acunningham-ship-it/agent-htop/issues/40).
+
+**Paperclip API not reachable**
+
+If you see "Warning: Paperclip API not reachable", check:
+- Paperclip is running: `curl http://localhost:3101/health`
+- API URL is correct: check `~/.config/agent-htop/config.toml` or use `--api-url`
+
+The dashboard will still show agents from log files, but real-time updates and kill control will be unavailable.
+
+**Missing Claude Code sessions**
+
+Make sure Claude Code has run at least once and created log files in `~/.claude/projects/`. Check:
+- `ls -la ~/.claude/projects/`
+- `find ~/.claude/projects -name "*.jsonl" | head`
