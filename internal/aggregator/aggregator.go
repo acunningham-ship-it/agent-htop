@@ -30,6 +30,7 @@ type FleetState struct {
 type HostMetrics struct {
 	CPU     *sysinfo.CPUMetrics
 	Memory  *sysinfo.MemoryMetrics
+	Disks   *sysinfo.DiskList
 	Network *sysinfo.NetworkMetrics
 	GPU     *sysinfo.GPUMetrics
 }
@@ -67,6 +68,7 @@ type Aggregator struct {
 	watcher     *watcher.Watcher
 	detector    *anomaly.Detector
 	runtimes    map[parser.Runtime]bool // Which runtimes to include
+	parser      *parser.StatefulParser   // Stateful incremental parser for Paperclip logs
 
 	cpuCollector     *sysinfo.CPUCollector
 	memoryCollector  *sysinfo.MemoryCollector
@@ -107,6 +109,7 @@ func NewAggregatorWithRuntimes(companyID, logDir string, agentNamer AgentNamer, 
 		watcher:          w,
 		detector:         anomaly.NewDetector(),
 		runtimes:         runtimeMap,
+		parser:           parser.NewStatefulParser(companyID, ""),
 		cpuCollector:     sysinfo.NewCPUCollector(time.Second),
 		memoryCollector:  sysinfo.NewMemoryCollector(time.Second),
 		diskCollector:    sysinfo.NewDiskCollector(time.Second, false), // allMounts=false to skip pseudo-filesystems
@@ -201,8 +204,8 @@ func (a *Aggregator) loadExistingLogs(ctx context.Context) error {
 					if count%100 == 0 {
 						fmt.Printf("[aggregator] Processed %d log files\n", count)
 					}
-					// Parse the log file
-					if err := a.parseAndUpdateLog(ctx, path); err != nil {
+					// Parse the log file (full parse for initial load)
+					if err := a.parseAndUpdateLog(ctx, path, "new"); err != nil {
 						fmt.Printf("Warning: failed to parse %s: %v\n", path, err)
 						// Continue processing other logs
 					}
@@ -253,7 +256,8 @@ func (a *Aggregator) loadExistingLogs(ctx context.Context) error {
 }
 
 // parseAndUpdateLog parses a single log file and updates fleet state.
-func (a *Aggregator) parseAndUpdateLog(ctx context.Context, logPath string) error {
+// eventType should be "new" for initial file creation or "append" for new content appended to existing file.
+func (a *Aggregator) parseAndUpdateLog(ctx context.Context, logPath, eventType string) error {
 	// Extract company, agent, run IDs from path: company/agent/runID.ndjson
 	rel, err := filepath.Rel(a.logDir, logPath)
 	if err != nil {
@@ -266,20 +270,25 @@ func (a *Aggregator) parseAndUpdateLog(ctx context.Context, logPath string) erro
 		return fmt.Errorf("invalid log path structure: %s", rel)
 	}
 
-	companyID := parts[len(parts)-3]
-	agentID := parts[len(parts)-2]
 	runID := parts[len(parts)-1]
 	runID = runID[:len(runID)-len(".ndjson")] // Remove extension
 
-	// Parse the log file
+	// Parse the log file with appropriate strategy
 	file, err := os.Open(logPath)
 	if err != nil {
 		return fmt.Errorf("failed to open log: %w", err)
 	}
 	defer file.Close()
 
-	p := parser.NewParser(companyID, agentID, runID)
-	run, err := p.Parse(file)
+	var run *parser.AgentRun
+
+	// Use incremental parsing for append events, full parse for new events
+	if eventType == "append" {
+		run, _, err = a.parser.ParseIncremental(logPath, runID, file)
+	} else {
+		// Default to full parse for "new" events and unknown types
+		run, err = a.parser.ParseFull(logPath, runID, file)
+	}
 	if err != nil {
 		return fmt.Errorf("failed to parse log: %w", err)
 	}
@@ -447,10 +456,12 @@ func (a *Aggregator) updateFleetState(ctx context.Context, run *parser.AgentRun)
 	}
 	cpuMetrics := a.cpuCollector.Get()
 	memMetrics := a.memoryCollector.Get()
+	diskMetrics := a.diskCollector.Get()
 	networkMetrics := a.networkCollector.Get()
 	gpuMetrics := a.gpuCollector.Get()
 	a.fleetState.HostMetrics.CPU = cpuMetrics
 	a.fleetState.HostMetrics.Memory = memMetrics
+	a.fleetState.HostMetrics.Disks = diskMetrics
 	a.fleetState.HostMetrics.Network = networkMetrics
 	a.fleetState.HostMetrics.GPU = gpuMetrics
 
@@ -511,8 +522,8 @@ func (a *Aggregator) run(ctx context.Context) {
 			// Build full path
 			logPath := filepath.Join(a.logDir, event.CompanyID, event.AgentID, event.RunID+".ndjson")
 
-			// Parse and update
-			if err := a.parseAndUpdateLog(ctx, logPath); err != nil {
+			// Parse and update (pass event type for optimal parsing strategy)
+			if err := a.parseAndUpdateLog(ctx, logPath, event.Type); err != nil {
 				fmt.Printf("Warning: failed to parse %s: %v\n", logPath, err)
 			}
 		}
@@ -1177,4 +1188,15 @@ func (w *systemMetricsWrapper) GetNetworkInternetUp() bool {
 		return true // Default to true if unavailable
 	}
 	return w.network.InternetUp
+}
+
+func (w *systemMetricsWrapper) GetFilesystemMetrics() []health.FilesystemMetrics {
+	if w.disk == nil || len(w.disk.Mounts) == 0 {
+		return []health.FilesystemMetrics{}
+	}
+	result := make([]health.FilesystemMetrics, len(w.disk.Mounts))
+	for i, mount := range w.disk.Mounts {
+		result[i] = mount
+	}
+	return result
 }

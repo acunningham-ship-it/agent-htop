@@ -1,6 +1,9 @@
 package parser
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // Runtime identifies the execution environment for an agent run.
 type Runtime string
@@ -98,10 +101,11 @@ type ToolHeatmap struct {
 }
 
 // LogLine represents the outer NDJSON wrapper.
+// Chunk is stored as json.RawMessage to defer parsing until needed.
 type LogLine struct {
-	Ts     string `json:"ts"`
-	Stream string `json:"stream"`
-	Chunk  string `json:"chunk"`
+	Ts     string          `json:"ts"`
+	Stream string          `json:"stream"`
+	Chunk  json.RawMessage `json:"chunk"`
 }
 
 // Event represents a parsed inner event (after unmarshaling chunk).

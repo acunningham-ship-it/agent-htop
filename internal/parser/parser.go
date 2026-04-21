@@ -46,36 +46,54 @@ func (p *Parser) Parse(r io.Reader) (*AgentRun, error) {
 			continue
 		}
 
-		// Parse outer wrapper
+		// Parse outer wrapper - use RawMessage to defer inner parsing
 		var logLine LogLine
 		if err := json.Unmarshal([]byte(line), &logLine); err != nil {
 			return nil, fmt.Errorf("failed to parse log line: %w", err)
 		}
 
-		// Parse inner chunk (skip non-JSON lines like plain text output)
-		var event map[string]interface{}
-		if err := json.Unmarshal([]byte(logLine.Chunk), &event); err != nil {
+		// Skip empty chunks
+		if len(logLine.Chunk) == 0 {
+			continue
+		}
+
+		// Quick type check without full unmarshaling
+		// Use a minimal struct to extract just the type field
+		var typeCheck struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(logLine.Chunk, &typeCheck); err != nil {
 			// Skip non-JSON chunks (plain text output from process)
 			continue
 		}
 
-		// Route by event type
-		eventType, ok := event["type"].(string)
-		if !ok {
-			continue
-		}
-
-		switch eventType {
+		// Route by event type - unmarshal full event only when needed
+		switch typeCheck.Type {
 		case "system":
-			p.handleSystem(event, run, logLine.Ts)
+			var event map[string]interface{}
+			if err := json.Unmarshal(logLine.Chunk, &event); err == nil {
+				p.handleSystem(event, run, logLine.Ts)
+			}
 		case "assistant":
-			p.handleAssistant(event, run)
+			var event map[string]interface{}
+			if err := json.Unmarshal(logLine.Chunk, &event); err == nil {
+				p.handleAssistant(event, run)
+			}
 		case "user":
-			p.handleUser(event, run)
+			var event map[string]interface{}
+			if err := json.Unmarshal(logLine.Chunk, &event); err == nil {
+				p.handleUser(event, run)
+			}
 		case "rate_limit_event":
-			p.handleRateLimit(event, run)
+			var event map[string]interface{}
+			if err := json.Unmarshal(logLine.Chunk, &event); err == nil {
+				p.handleRateLimit(event, run)
+			}
 		case "result":
-			p.handleResult(event, run, logLine.Ts)
+			var event map[string]interface{}
+			if err := json.Unmarshal(logLine.Chunk, &event); err == nil {
+				p.handleResult(event, run, logLine.Ts)
+			}
 		}
 	}
 
