@@ -27,12 +27,27 @@ type Agent struct {
 
 // Issue represents a Paperclip issue (used for fallback run metadata).
 type Issue struct {
+	ID              string    `json:"id"`
+	Title           string    `json:"title"`
+	Status          string    `json:"status"`
+	AssigneeAgentID string    `json:"assigneeAgentId"`
+	CreatedAt       string    `json:"createdAt"`
+	UpdatedAt       string    `json:"updatedAt"`
+	Labels          []string  `json:"labels,omitempty"`
+}
+
+// Run represents a Paperclip agent run/execution.
+type Run struct {
 	ID            string    `json:"id"`
-	Title         string    `json:"title"`
-	Status        string    `json:"status"`
-	AssigneeAgentID string  `json:"assigneeAgentId"`
+	AgentID       string    `json:"agentId"`
+	IssueID       string    `json:"issueId,omitempty"`
+	Status        string    `json:"status"` // completed, error, timeout, etc.
+	IsError       bool      `json:"isError"`
+	StderrExcerpt string    `json:"stderrExcerpt,omitempty"`
+	Result        string    `json:"result,omitempty"`
 	CreatedAt     string    `json:"createdAt"`
 	UpdatedAt     string    `json:"updatedAt"`
+	CompletedAt   string    `json:"completedAt,omitempty"`
 }
 
 // NewClient creates a new Paperclip API client.
@@ -259,4 +274,35 @@ func (c *Client) ResumeAgent(ctx context.Context, agentID string) error {
 	}
 
 	return nil
+}
+
+// ListIssues fetches issues for a company, optionally filtered by status.
+func (c *Client) ListIssues(ctx context.Context, companyID string, status string) ([]*Issue, error) {
+	url := fmt.Sprintf("%s/api/companies/%s/issues", c.baseURL, companyID)
+	if status != "" {
+		url += "?status=" + status
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch issues: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("API returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	var issues []*Issue
+	if err := json.NewDecoder(resp.Body).Decode(&issues); err != nil {
+		return nil, fmt.Errorf("failed to decode issues: %w", err)
+	}
+
+	return issues, nil
 }
