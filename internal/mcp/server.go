@@ -6,11 +6,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/acunningham-ship-it/agent-htop/internal/action"
 	"github.com/acunningham-ship-it/agent-htop/internal/aggregator"
 	"github.com/acunningham-ship-it/agent-htop/internal/api"
+	"github.com/acunningham-ship-it/agent-htop/internal/incidents"
 	"github.com/acunningham-ship-it/agent-htop/internal/queue"
 )
 
@@ -45,18 +48,27 @@ type Server struct {
 	callerAgentID string
 	actionLog     *action.ActionLog
 	queueManager  *queue.Manager
+	scanner       *incidents.Scanner
+	stopCh        chan struct{}
 
 	mu sync.Mutex // Protects scanner safety if needed
 }
 
 // NewServer creates a new MCP server.
 func NewServer(agg *aggregator.Aggregator, apiClient *api.Client, companyID, callerAgentID string, queueMgr *queue.Manager) *Server {
+	// Setup cache directory for incident scanner
+	home, _ := os.UserHomeDir()
+	cacheDir := filepath.Join(home, ".config", "agent-htop", "incidents-cache")
+	os.MkdirAll(cacheDir, 0755)
+
 	s := &Server{
 		agg:           agg,
 		apiClient:     apiClient,
 		companyID:     companyID,
 		callerAgentID: callerAgentID,
 		queueManager:  queueMgr,
+		scanner:       incidents.NewScanner(apiClient, companyID, cacheDir),
+		stopCh:        make(chan struct{}),
 	}
 
 	// Initialize action log
@@ -66,11 +78,25 @@ func NewServer(agg *aggregator.Aggregator, apiClient *api.Client, companyID, cal
 		fmt.Fprintf(os.Stderr, "Warning: failed to initialize action log: %v\n", err)
 	}
 
+	// Set up wiki bridge function for incident postmortems
+	s.scanner.SetWikiBridge(func(ctx context.Context, filePath, content string) error {
+		// TODO: Use graphify wiki_write tool to write to the actual wiki
+		// For now, just write directly to the file system
+		homeDir, _ := os.UserHomeDir()
+		fullPath := filepath.Join(homeDir, filePath)
+		dir := filepath.Dir(fullPath)
+		os.MkdirAll(dir, 0755)
+		return os.WriteFile(fullPath, []byte(content), 0644)
+	})
+
 	return s
 }
 
 // Start runs the MCP server, reading from stdin and writing to stdout.
 func (s *Server) Start(ctx context.Context) {
+	// Start incident scanning background task
+	go s.scanIncidentsLoop(ctx)
+
 	scanner := bufio.NewScanner(os.Stdin)
 
 	for scanner.Scan() {
@@ -125,6 +151,9 @@ func (s *Server) Start(ctx context.Context) {
 	if err := scanner.Err(); err != nil {
 		fmt.Fprintf(os.Stderr, "Scanner error: %v\n", err)
 	}
+
+	// Cleanup
+	close(s.stopCh)
 }
 
 // handleRequest dispatches JSON-RPC request to the appropriate tool handler.
@@ -141,6 +170,8 @@ func (s *Server) handleRequest(ctx context.Context, req *JSONRPCRequest) *JSONRP
 		"list_policies":         s.handleListPolicies,
 		"get_system_alerts":     s.handleGetSystemAlerts,
 		"get_network_metrics":   s.handleGetNetworkMetrics,
+		"get_disk_usage":        s.handleGetDiskUsage,
+		"get_disk_io":           s.handleGetDiskIO,
 		"get_host_metrics":      s.handleGetHostMetrics,
 		"get_gpu_metrics":       s.handleGetGPUMetrics,
 		"get_agent_task":        s.handleGetAgentTask,
@@ -234,4 +265,79 @@ func (s *Server) getCallerAgentID(params json.RawMessage) string {
 		return s.callerAgentID
 	}
 	return "unknown"
+}
+
+// scanIncidentsLoop runs the incident scanner periodically.
+func (s *Server) scanIncidentsLoop(ctx context.Context) {
+	// Run initial scan immediately, then every 5 minutes
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	// Scan immediately on startup
+	s.scanIncidents(ctx)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.stopCh:
+			return
+		case <-ticker.C:
+			s.scanIncidents(ctx)
+		}
+	}
+}
+
+// scanIncidents detects and writes postmortems for incidents detected in the past 24 hours.
+func (s *Server) scanIncidents(ctx context.Context) {
+	if s.scanner == nil {
+		return
+	}
+
+	// Scan for incidents in the last 24 hours
+	incidents, err := s.scanner.ScanLast24h(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[incidents] Error scanning for incidents: %v\n", err)
+		return
+	}
+
+	if len(incidents) == 0 {
+		return // No incidents found
+	}
+
+	// Process each incident
+	for _, incident := range incidents {
+		// Check rate limit (max 3 postmortems per week)
+		can, count, err := s.scanner.CheckRateLimit(ctx)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[incidents] Rate limit check failed: %v\n", err)
+			continue
+		}
+
+		if !can {
+			fmt.Fprintf(os.Stderr, "[incidents] Rate limit exceeded (already %d postmortems this week)\n", count)
+			continue
+		}
+
+		// Check for duplicates (within last 30 days)
+		isDup, existingPath, err := s.scanner.DuplicateCheck(ctx, incident)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[incidents] Duplicate check failed: %v\n", err)
+			continue
+		}
+
+		if isDup {
+			fmt.Fprintf(os.Stderr, "[incidents] Incident is duplicate of %s, skipping\n", existingPath)
+			continue
+		}
+
+		// Write the postmortem
+		filePath, err := s.scanner.WritePostmortem(ctx, incident, s.callerAgentID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[incidents] Failed to write postmortem: %v\n", err)
+			continue
+		}
+
+		fmt.Fprintf(os.Stderr, "[incidents] ✓ Postmortem written: %s\n", filePath)
+	}
 }

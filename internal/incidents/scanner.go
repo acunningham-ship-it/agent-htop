@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -306,8 +307,18 @@ func (s *Scanner) WritePostmortem(ctx context.Context, incident *Incident, captu
 
 // generatePostmortemPath creates the file path for a postmortem.
 func (s *Scanner) generatePostmortemPath(incident *Incident) string {
-	slug := strings.ToLower(strings.ReplaceAll(incident.Title, " ", "-"))
+	// Remove non-ASCII characters (emoji, etc.)
+	re := regexp.MustCompile(`[^\x00-\x7F]`)
+	cleaned := re.ReplaceAllString(incident.Title, "")
+
+	// Convert to lowercase and replace spaces/slashes with hyphens
+	slug := strings.ToLower(strings.ReplaceAll(cleaned, " ", "-"))
 	slug = strings.ReplaceAll(slug, "/", "-")
+
+	// Remove consecutive hyphens
+	slug = regexp.MustCompile(`-+`).ReplaceAllString(slug, "-")
+	slug = strings.Trim(slug, "-")
+
 	date := time.Now().Format("2006-01-02")
 	return fmt.Sprintf("wiki/incidents/%s-%s.md", date, slug)
 }
