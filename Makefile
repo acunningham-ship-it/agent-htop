@@ -1,6 +1,6 @@
 .PHONY: build test clean help version
 
-VERSION := v0.1.0
+VERSION := v0.3.0
 GIT_SHA := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 LDFLAGS := -ldflags "-X main.Version=$(VERSION) -X main.GitSHA=$(GIT_SHA)"
 

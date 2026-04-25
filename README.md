@@ -13,7 +13,7 @@ asciinema play agent-htop-demo.cast
 ```
 
 ```
-agent-htop  v0.2.0   sessions: 3   running: 2   cost today: $0.42   [q]uit
+agent-htop  v0.3.0   sessions: 3   running: 2   cost today: $0.42   [q]uit
 
   NAME                           STATUS   MODEL         TOKENS IN  TOKENS OUT  COST     ELAPSED   LAST TOOL
   ────────────────────────────────────────────────────────────────────────────────────────────────────────

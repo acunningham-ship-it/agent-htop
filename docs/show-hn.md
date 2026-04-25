@@ -1,17 +1,19 @@
-# Show HN: agent-htop — Live Dashboard for Claude Code & AI Agent Fleets
+# Show HN: agent-htop v0.3 — Terminal Dashboard for Claude Code & AI Agent Fleets
 
-Running Claude Code sessions or AI agents and wondering where the compute budget went? I built agent-htop—a single-command terminal dashboard that shows all your AI sessions in real-time with costs, tokens, and status updates.
+Running Claude Code sessions or managing AI agent fleets and wondering what's actually happening? agent-htop is a live terminal dashboard that shows your AI sessions in real-time with costs, errors, system health, and intelligent incident detection.
 
 ## The Problem
 
-I had three Claude Code sessions running overnight on a side project. Woke up to a larger bill than expected but had no quick way to see which session caused it. The logs are scattered across `~/.claude/projects/`, costs are buried in JSON, and there's no live view of what's actually running.
+I had three Claude Code sessions running overnight. Woke up to a larger bill than expected but had no quick way to see which session caused it—and no insight into *why* they were expensive. The logs are scattered across `~/.claude/projects/`, costs are buried in JSON, and there's no visibility into system health or anomalies until things break.
+
+For teams running Paperclip agent fleets, the problem is worse: you're managing dozens of agents but can't quickly see their status, cost anomalies, or health issues without polling an API or digging through logs.
 
 ## The Solution
 
-A single Go binary that auto-discovers Claude Code sessions and optionally connects to Paperclip agent fleets. Everything in one table, updating in real-time.
+A single Go binary that auto-discovers Claude Code sessions and optionally connects to Paperclip agent fleets. Everything in one live-updating table with **automatic incident detection and postmortem generation**.
 
 ```
-agent-htop  v0.2.0   sessions: 3   running: 2   cost today: $0.42   [q]uit
+agent-htop  v0.3.0   sessions: 3   running: 2   cost today: $0.42   [q]uit
 
   NAME                           STATUS   MODEL         TOKENS IN  TOKENS OUT  COST     ELAPSED   LAST TOOL
   ────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -24,15 +26,26 @@ agent-htop  v0.2.0   sessions: 3   running: 2   cost today: $0.42   [q]uit
 
 **Optional Paperclip fleet support** — add `--company <id>` to monitor your AI agent fleet with kill/pause control (`K` / `P` keys).
 
-## Features
+## v0.3.0 Features
 
 - ✅ Real-time cost tracking (Anthropic pricing built-in)
 - ✅ Token usage per session / agent
-- ✅ Anomaly detection (runaway spend, error streaks)
+- ✅ **Anomaly detection** (runaway spend, error streaks, filesystem full alerts)
+- ✅ **Automatic incident postmortem generation** (captures session state when errors occur)
+- ✅ **Task queue management** (view pending tasks in Paperclip queues)
+- ✅ **System health monitoring** (CPU, memory, disk, GPU, network per-filesystem alerts)
+- ✅ **MCP tools** (process listing, killing, queue operations)
 - ✅ Optional Discord alerts
-- ✅ 7-day cost history (`H` key toggle)
+- ✅ 7-day cost history and spend rate projections
 - ✅ Kill / pause / resume agents (Paperclip only)
 - ✅ Filter and sort by name, cost, status, spend rate
+- ✅ **Incremental log parsing** (fixed scanner errors for large logs)
+
+## Why v0.3?
+
+- **Incident detection with automatic postmortem**: When a session fails or gets expensive, agent-htop now automatically writes a structured postmortem capturing error context, cost spike details, and recovery state. No more manually digging through logs after an incident.
+- **Task visibility**: For Paperclip users, see exactly what tasks are queued and which agent will handle them. Useful for detecting stuck queues or load imbalances.
+- **Health checks**: System-level monitoring (disk full, GPU thermal, network down) that ties directly to agent anomalies. Know if your expensive run was due to a misconfigured retry loop or a real disk issue.
 
 ## Installation
 
@@ -46,11 +59,11 @@ brew install acunningham-ship-it/tap/agent-htop
 
 ```bash
 agent-htop   # auto-discovers Claude Code sessions
-agent-htop --company <id>   # also add Paperclip agents
+agent-htop --company <id>   # also add Paperclip agents  
 ```
 
 Watch the demo: `asciinema play agent-htop-demo.cast` (20 seconds)
 
-Built as a single Go binary with bubbletea TUI. Works on Linux and macOS. ~11MB.
+Single Go binary, ~11MB. Linux and macOS. No external dependencies for Claude Code mode.
 
 **GitHub:** https://github.com/acunningham-ship-it/agent-htop
