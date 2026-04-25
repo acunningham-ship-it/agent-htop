@@ -1,6 +1,7 @@
 package sysinfo
 
 import (
+	"context"
 	"fmt"
 	"os/user"
 	"sort"
@@ -39,6 +40,7 @@ type ProcessCollector struct {
 	ticker    *time.Ticker
 	stopCh    chan struct{}
 	wg        sync.WaitGroup
+	ctx       context.Context
 }
 
 // NewProcessCollector creates a new process collector.
@@ -47,11 +49,13 @@ func NewProcessCollector(interval time.Duration) *ProcessCollector {
 		list:   &ProcessList{Processes: make([]*ProcessInfo, 0)},
 		ticker: time.NewTicker(interval),
 		stopCh: make(chan struct{}),
+		ctx:    context.Background(),
 	}
 }
 
-// Start begins collecting process information.
-func (p *ProcessCollector) Start() error {
+// Start begins collecting process information with context awareness.
+func (p *ProcessCollector) Start(ctx context.Context) error {
+	p.ctx = ctx
 	// Collect immediately on start
 	if err := p.collect(); err != nil {
 		return err
@@ -63,6 +67,8 @@ func (p *ProcessCollector) Start() error {
 		defer p.wg.Done()
 		for {
 			select {
+			case <-ctx.Done():
+				return
 			case <-p.ticker.C:
 				_ = p.collect()
 			case <-p.stopCh:

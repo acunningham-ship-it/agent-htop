@@ -14,6 +14,12 @@ type Alert struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
+// FilesystemMetrics represents a single filesystem's metrics.
+type FilesystemMetrics interface {
+	GetMountPoint() string
+	GetUsedPercent() float64
+}
+
 // SystemMetrics interface for system health checks.
 type SystemMetrics interface {
 	GetCPULoad1Min() float64
@@ -25,6 +31,7 @@ type SystemMetrics interface {
 	GetMemSwapTotalMB() uint64
 	GetDiskUsedPercent() float64
 	GetDiskFreeGB() uint64
+	GetFilesystemMetrics() []FilesystemMetrics
 	GetGPUTempC() float64
 	GetGPUAvailable() bool
 	GetNetworkInternetUp() bool
@@ -213,6 +220,52 @@ func (r *GPUThermalRule) Evaluate(metrics SystemMetrics) *Alert {
 	return nil
 }
 
+// DiskUsagePerFilesystemRule detects disk space issues on individual filesystems.
+type DiskUsagePerFilesystemRule struct{}
+
+func NewDiskUsagePerFilesystemRule() *DiskUsagePerFilesystemRule {
+	return &DiskUsagePerFilesystemRule{}
+}
+
+func (r *DiskUsagePerFilesystemRule) Name() string {
+	return "filesystem_full"
+}
+
+func (r *DiskUsagePerFilesystemRule) Evaluate(metrics SystemMetrics) *Alert {
+	now := time.Now()
+	filesystems := metrics.GetFilesystemMetrics()
+
+	// Check each filesystem for high usage
+	for _, fs := range filesystems {
+		usedPercent := fs.GetUsedPercent()
+		mountPoint := fs.GetMountPoint()
+
+		// Critical: > 95%
+		if usedPercent > 95 {
+			return &Alert{
+				Rule:      r.Name(),
+				Severity:  "critical",
+				Message:   fmt.Sprintf("Filesystem %s critically full: %.1f%% (pausing agents)", mountPoint, usedPercent),
+				Since:     now,
+				UpdatedAt: now,
+			}
+		}
+
+		// High: > 90%
+		if usedPercent > 90 {
+			return &Alert{
+				Rule:      r.Name(),
+				Severity:  "high",
+				Message:   fmt.Sprintf("Filesystem %s space low: %.1f%% used", mountPoint, usedPercent),
+				Since:     now,
+				UpdatedAt: now,
+			}
+		}
+	}
+
+	return nil
+}
+
 // NetworkDownRule detects network connectivity loss.
 type NetworkDownRule struct{}
 
@@ -251,6 +304,7 @@ func NewAlertEvaluator() *AlertEvaluator {
 	ae.RegisterRule(NewOOMRiskRule())
 	ae.RegisterRule(NewLoadSpikeRule())
 	ae.RegisterRule(NewDiskUsageRule())
+	ae.RegisterRule(NewDiskUsagePerFilesystemRule())
 	ae.RegisterRule(NewGPUThermalRule())
 	ae.RegisterRule(NewNetworkDownRule())
 	return ae

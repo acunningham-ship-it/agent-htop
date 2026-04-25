@@ -529,6 +529,104 @@ func (s *Server) handleGetNetworkMetrics(params json.RawMessage) (interface{}, *
 	}, nil
 }
 
+// handleGetDiskUsage returns current disk usage metrics for all filesystems.
+func (s *Server) handleGetDiskUsage(params json.RawMessage) (interface{}, *JSONRPCErr) {
+	state := s.agg.GetSystemState()
+	if state == nil {
+		return nil, &JSONRPCErr{
+			Code:    -32603,
+			Message: "Internal error",
+			Data:    "system state unavailable",
+		}
+	}
+
+	diskMetrics := state.Host.Disks
+
+	type FilesystemInfo struct {
+		Device      string  `json:"device"`
+		MountPoint  string  `json:"mount_point"`
+		FSType      string  `json:"fs_type"`
+		TotalBytes  uint64  `json:"total_bytes"`
+		UsedBytes   uint64  `json:"used_bytes"`
+		FreeBytes   uint64  `json:"free_bytes"`
+		UsedPercent float64 `json:"used_percent"`
+		Warning     bool    `json:"warning"`      // true if > 90%
+		Critical    bool    `json:"critical"`     // true if > 95%
+	}
+
+	filesystems := make([]*FilesystemInfo, 0)
+	if diskMetrics != nil && len(diskMetrics.Mounts) > 0 {
+		for _, mount := range diskMetrics.Mounts {
+			filesystems = append(filesystems, &FilesystemInfo{
+				Device:      mount.Device,
+				MountPoint:  mount.MountPoint,
+				FSType:      mount.FSType,
+				TotalBytes:  mount.TotalBytes,
+				UsedBytes:   mount.UsedBytes,
+				FreeBytes:   mount.FreeBytes,
+				UsedPercent: mount.UsedPercent,
+				Warning:     mount.UsedPercent > 90,
+				Critical:    mount.UsedPercent > 95,
+			})
+		}
+	}
+
+	updatedAt := time.Time{}
+	if diskMetrics != nil {
+		updatedAt = diskMetrics.UpdatedAt
+	}
+
+	return map[string]interface{}{
+		"filesystems": filesystems,
+		"updated_at":  updatedAt,
+	}, nil
+}
+
+// handleGetDiskIO returns current disk I/O metrics for all devices.
+func (s *Server) handleGetDiskIO(params json.RawMessage) (interface{}, *JSONRPCErr) {
+	state := s.agg.GetSystemState()
+	if state == nil {
+		return nil, &JSONRPCErr{
+			Code:    -32603,
+			Message: "Internal error",
+			Data:    "system state unavailable",
+		}
+	}
+
+	diskMetrics := state.Host.Disks
+
+	type IOInfo struct {
+		Device           string  `json:"device"`
+		ReadsPerSec      float64 `json:"reads_per_sec"`
+		WritesPerSec     float64 `json:"writes_per_sec"`
+		ReadBytesPerSec  float64 `json:"read_bytes_per_sec"`
+		WriteBytesPerSec float64 `json:"write_bytes_per_sec"`
+	}
+
+	ioDevices := make([]*IOInfo, 0)
+	if diskMetrics != nil && len(diskMetrics.IOStats) > 0 {
+		for _, io := range diskMetrics.IOStats {
+			ioDevices = append(ioDevices, &IOInfo{
+				Device:           io.Device,
+				ReadsPerSec:      io.ReadsPerSec,
+				WritesPerSec:     io.WritesPerSec,
+				ReadBytesPerSec:  io.ReadBytesPerSec,
+				WriteBytesPerSec: io.WriteBytesPerSec,
+			})
+		}
+	}
+
+	updatedAt := time.Time{}
+	if diskMetrics != nil {
+		updatedAt = diskMetrics.UpdatedAt
+	}
+
+	return map[string]interface{}{
+		"io_devices": ioDevices,
+		"updated_at": updatedAt,
+	}, nil
+}
+
 // handleGetAgentTask returns the current task and task history for a session.
 func (s *Server) handleGetAgentTask(params json.RawMessage) (interface{}, *JSONRPCErr) {
 	var req struct {

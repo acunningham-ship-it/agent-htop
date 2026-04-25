@@ -1,6 +1,7 @@
 package sysinfo
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"strconv"
@@ -34,6 +35,7 @@ type GPUCollector struct {
 	ticker  *time.Ticker
 	stopCh  chan struct{}
 	wg      sync.WaitGroup
+	ctx     context.Context
 }
 
 // NewGPUCollector creates a new GPU metrics collector.
@@ -42,11 +44,13 @@ func NewGPUCollector(interval time.Duration) *GPUCollector {
 		metrics: &GPUMetrics{GPUs: []*GPU{}, Available: false},
 		ticker:  time.NewTicker(interval),
 		stopCh:  make(chan struct{}),
+		ctx:     context.Background(),
 	}
 }
 
-// Start begins collecting GPU metrics.
-func (g *GPUCollector) Start() error {
+// Start begins collecting GPU metrics with context awareness.
+func (g *GPUCollector) Start(ctx context.Context) error {
+	g.ctx = ctx
 	// Collect immediately on start
 	_ = g.collect()
 
@@ -56,6 +60,8 @@ func (g *GPUCollector) Start() error {
 		defer g.wg.Done()
 		for {
 			select {
+			case <-ctx.Done():
+				return
 			case <-g.ticker.C:
 				_ = g.collect()
 			case <-g.stopCh:

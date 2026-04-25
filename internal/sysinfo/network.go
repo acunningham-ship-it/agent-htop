@@ -1,6 +1,7 @@
 package sysinfo
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -48,6 +49,7 @@ type NetworkCollector struct {
 	ticker           *time.Ticker
 	stopCh           chan struct{}
 	wg               sync.WaitGroup
+	ctx              context.Context
 }
 
 // NewNetworkCollector creates a new network metrics collector.
@@ -57,11 +59,13 @@ func NewNetworkCollector(interval time.Duration) *NetworkCollector {
 		lastIOCounters: make(map[string]gopsnet.IOCountersStat),
 		ticker:         time.NewTicker(interval),
 		stopCh:         make(chan struct{}),
+		ctx:            context.Background(),
 	}
 }
 
-// Start begins collecting network metrics.
-func (n *NetworkCollector) Start() error {
+// Start begins collecting network metrics with context awareness.
+func (n *NetworkCollector) Start(ctx context.Context) error {
+	n.ctx = ctx
 	// Collect immediately on start
 	_ = n.collect()
 
@@ -71,6 +75,8 @@ func (n *NetworkCollector) Start() error {
 		defer n.wg.Done()
 		for {
 			select {
+			case <-ctx.Done():
+				return
 			case <-n.ticker.C:
 				_ = n.collect()
 			case <-n.stopCh:

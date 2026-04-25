@@ -1,6 +1,7 @@
 package sysinfo
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -29,6 +30,7 @@ type MemoryCollector struct {
 	ticker  *time.Ticker
 	stopCh  chan struct{}
 	wg      sync.WaitGroup
+	ctx     context.Context
 }
 
 // NewMemoryCollector creates a new memory metrics collector.
@@ -37,11 +39,13 @@ func NewMemoryCollector(interval time.Duration) *MemoryCollector {
 		metrics: &MemoryMetrics{},
 		ticker:  time.NewTicker(interval),
 		stopCh:  make(chan struct{}),
+		ctx:     context.Background(),
 	}
 }
 
-// Start begins collecting memory metrics.
-func (m *MemoryCollector) Start() error {
+// Start begins collecting memory metrics with context awareness.
+func (m *MemoryCollector) Start(ctx context.Context) error {
+	m.ctx = ctx
 	// Collect immediately on start
 	if err := m.collect(); err != nil {
 		return err
@@ -53,6 +57,8 @@ func (m *MemoryCollector) Start() error {
 		defer m.wg.Done()
 		for {
 			select {
+			case <-ctx.Done():
+				return
 			case <-m.ticker.C:
 				_ = m.collect()
 			case <-m.stopCh:

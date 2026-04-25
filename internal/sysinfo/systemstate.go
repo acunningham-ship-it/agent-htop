@@ -1,6 +1,7 @@
 package sysinfo
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -89,6 +90,18 @@ func (s *SystemState) GetDiskFreeGB() uint64 {
 	return total
 }
 
+func (s *SystemState) GetFilesystemMetrics() []health.FilesystemMetrics {
+	// Return all filesystem metrics for per-filesystem health checks
+	if s.Host.Disks == nil || len(s.Host.Disks.Mounts) == 0 {
+		return []health.FilesystemMetrics{}
+	}
+	result := make([]health.FilesystemMetrics, len(s.Host.Disks.Mounts))
+	for i, mount := range s.Host.Disks.Mounts {
+		result[i] = mount
+	}
+	return result
+}
+
 func (s *SystemState) GetGPUTempC() float64 {
 	if len(s.Host.GPU.GPUs) > 0 {
 		return s.Host.GPU.GPUs[0].TempC
@@ -133,24 +146,24 @@ func NewStateCollector(interval time.Duration, cacheTTL time.Duration) *StateCol
 	}
 }
 
-// Start begins all underlying collectors.
-func (sc *StateCollector) Start() error {
-	if err := sc.cpuCollector.Start(); err != nil {
+// Start begins all underlying collectors with context awareness.
+func (sc *StateCollector) Start(ctx context.Context) error {
+	if err := sc.cpuCollector.Start(ctx); err != nil {
 		return err
 	}
-	if err := sc.memCollector.Start(); err != nil {
+	if err := sc.memCollector.Start(ctx); err != nil {
 		return err
 	}
-	if err := sc.diskCollector.Start(); err != nil {
+	if err := sc.diskCollector.Start(ctx); err != nil {
 		return err
 	}
-	if err := sc.gpuCollector.Start(); err != nil {
+	if err := sc.gpuCollector.Start(ctx); err != nil {
 		return err
 	}
-	if err := sc.networkCollector.Start(); err != nil {
+	if err := sc.networkCollector.Start(ctx); err != nil {
 		return err
 	}
-	if err := sc.procCollector.Start(); err != nil {
+	if err := sc.procCollector.Start(ctx); err != nil {
 		return err
 	}
 	return nil

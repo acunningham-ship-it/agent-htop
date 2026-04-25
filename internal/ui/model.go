@@ -1260,6 +1260,14 @@ func (m *Model) renderSystemMetrics() string {
 		}
 	}
 
+	// Add disk metrics if available
+	if m.fleet.HostMetrics.Disks != nil && len(m.fleet.HostMetrics.Disks.Mounts) > 0 {
+		diskStr := formatDiskMetrics(m.fleet.HostMetrics.Disks)
+		if diskStr != "" {
+			parts = append(parts, diskStr)
+		}
+	}
+
 	// Add GPU metrics if available
 	if m.fleet.HostMetrics.GPU != nil && len(m.fleet.HostMetrics.GPU.GPUs) > 0 {
 		gpuStr := formatGPUMetrics(m.fleet.HostMetrics.GPU)
@@ -1343,6 +1351,50 @@ func formatGPUMetrics(gpuMetrics *sysinfo.GPUMetrics) string {
 	}
 
 	return strings.Join(parts, " | ")
+}
+
+// formatDiskMetrics formats disk metrics into a compact display string.
+// Example: "/ 68% [████░░░░]" or "/ 68% [████░░░░] ⚠" for warnings
+func formatDiskMetrics(disks *sysinfo.DiskList) string {
+	if disks == nil || len(disks.Mounts) == 0 {
+		return ""
+	}
+
+	// Find the root filesystem (or highest usage if root not found)
+	var primaryMount *sysinfo.DiskMetrics
+	var maxUsage float64
+	for i := range disks.Mounts {
+		if disks.Mounts[i].MountPoint == "/" {
+			primaryMount = disks.Mounts[i]
+			break
+		}
+		if disks.Mounts[i].UsedPercent > maxUsage {
+			maxUsage = disks.Mounts[i].UsedPercent
+			primaryMount = disks.Mounts[i]
+		}
+	}
+
+	if primaryMount == nil {
+		return ""
+	}
+
+	// Build usage bar: 10 characters
+	usedBlocks := int(primaryMount.UsedPercent / 10.0)
+	if usedBlocks > 10 {
+		usedBlocks = 10
+	}
+	bar := strings.Repeat("█", usedBlocks) + strings.Repeat("░", 10-usedBlocks)
+
+	diskStr := fmt.Sprintf("%s %.0f%% [%s]", primaryMount.MountPoint, primaryMount.UsedPercent, bar)
+
+	// Add warning indicator if needed
+	if primaryMount.UsedPercent > 95 {
+		diskStr += " 🚨"
+	} else if primaryMount.UsedPercent > 90 {
+		diskStr += " ⚠"
+	}
+
+	return diskStr
 }
 
 // renderAlertBanner renders active health alerts with flashing effect for critical alerts.

@@ -2,6 +2,7 @@ package sysinfo
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"sort"
@@ -50,6 +51,7 @@ type DiskCollector struct {
 	wg          sync.WaitGroup
 	allMounts   bool                    // If true, include pseudo-filesystems
 	lastIOState map[string]diskIOState  // For calculating deltas
+	ctx         context.Context
 }
 
 // diskIOState tracks previous IO counters for delta calculation.
@@ -65,6 +67,7 @@ type diskIOState struct {
 var pseudoFilesystems = []string{
 	"tmpfs",
 	"devfs",
+	"devtmpfs",
 	"sysfs",
 	"proc",
 	"cgroup",
@@ -74,6 +77,15 @@ var pseudoFilesystems = []string{
 	"debugfs",
 	"tracefs",
 	"fuse.gvfsd-fuse",
+	"hugetlbfs",
+	"mqueue",
+	"devpts",
+	"autofs",
+	"binfmt_misc",
+	"efivarfs",
+	"bpf",
+	"fusectl",
+	"configfs",
 }
 
 // NewDiskCollector creates a new disk metrics collector.
@@ -84,11 +96,13 @@ func NewDiskCollector(interval time.Duration, allMounts bool) *DiskCollector {
 		stopCh:      make(chan struct{}),
 		allMounts:   allMounts,
 		lastIOState: make(map[string]diskIOState),
+		ctx:         context.Background(),
 	}
 }
 
-// Start begins collecting disk metrics.
-func (d *DiskCollector) Start() error {
+// Start begins collecting disk metrics with context awareness.
+func (d *DiskCollector) Start(ctx context.Context) error {
+	d.ctx = ctx
 	// Collect immediately on start
 	if err := d.collect(); err != nil {
 		return err
@@ -100,6 +114,8 @@ func (d *DiskCollector) Start() error {
 		defer d.wg.Done()
 		for {
 			select {
+			case <-ctx.Done():
+				return
 			case <-d.ticker.C:
 				_ = d.collect()
 			case <-d.stopCh:
@@ -149,6 +165,13 @@ func (d *DiskCollector) Get() *DiskList {
 
 // collect fetches the latest disk metrics from the system.
 func (d *DiskCollector) collect() error {
+	// Check if context is already cancelled - if so, exit immediately
+	select {
+	case <-d.ctx.Done():
+		return d.ctx.Err()
+	default:
+	}
+
 	// Get all partitions
 	partitions, err := disk.Partitions(!d.allMounts)
 	if err != nil {
@@ -302,4 +325,14 @@ func isPseudoFilesystem(fstype string) bool {
 		}
 	}
 	return false
+}
+
+// GetMountPoint returns the mount point (for health.FilesystemMetrics interface).
+func (dm *DiskMetrics) GetMountPoint() string {
+	return dm.MountPoint
+}
+
+// GetUsedPercent returns the used percentage (for health.FilesystemMetrics interface).
+func (dm *DiskMetrics) GetUsedPercent() float64 {
+	return dm.UsedPercent
 }

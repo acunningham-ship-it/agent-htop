@@ -137,23 +137,23 @@ func (a *Aggregator) SetPolicyEngine(engine PolicyEvaluator) {
 
 // Start begins aggregating fleet state.
 func (a *Aggregator) Start(ctx context.Context) error {
-	// Start system metrics collectors
-	if err := a.cpuCollector.Start(); err != nil {
+	// Start system metrics collectors with context
+	if err := a.cpuCollector.Start(ctx); err != nil {
 		fmt.Printf("[aggregator] Warning: failed to start CPU collector: %v\n", err)
 	}
-	if err := a.memoryCollector.Start(); err != nil {
+	if err := a.memoryCollector.Start(ctx); err != nil {
 		fmt.Printf("[aggregator] Warning: failed to start memory collector: %v\n", err)
 	}
-	if err := a.diskCollector.Start(); err != nil {
+	if err := a.diskCollector.Start(ctx); err != nil {
 		fmt.Printf("[aggregator] Warning: failed to start disk collector: %v\n", err)
 	}
-	if err := a.gpuCollector.Start(); err != nil {
+	if err := a.gpuCollector.Start(ctx); err != nil {
 		fmt.Printf("[aggregator] Warning: failed to start GPU collector: %v\n", err)
 	}
-	if err := a.networkCollector.Start(); err != nil {
+	if err := a.networkCollector.Start(ctx); err != nil {
 		fmt.Printf("[aggregator] Warning: failed to start network collector: %v\n", err)
 	}
-	if err := a.processCollector.Start(); err != nil {
+	if err := a.processCollector.Start(ctx); err != nil {
 		fmt.Printf("[aggregator] Warning: failed to start process collector: %v\n", err)
 	}
 
@@ -731,12 +731,26 @@ func (a *Aggregator) handleAnomalies(ctx context.Context) {
 func (a *Aggregator) Stop() {
 	close(a.stopCh)
 	a.detector.Stop()
-	a.cpuCollector.Stop()
-	a.memoryCollector.Stop()
-	a.diskCollector.Stop()
-	a.gpuCollector.Stop()
-	a.networkCollector.Stop()
-	a.processCollector.Stop()
+	// Stop all collectors in parallel to avoid waiting for slow collect() operations sequentially
+	collectorStops := []func(){
+		a.cpuCollector.Stop,
+		a.memoryCollector.Stop,
+		a.diskCollector.Stop,
+		a.gpuCollector.Stop,
+		a.networkCollector.Stop,
+		a.processCollector.Stop,
+	}
+
+	var wg sync.WaitGroup
+	for _, stop := range collectorStops {
+		wg.Add(1)
+		go func(stopFn func()) {
+			defer wg.Done()
+			stopFn()
+		}(stop)
+	}
+	wg.Wait()
+
 	a.wg.Wait()
 }
 
